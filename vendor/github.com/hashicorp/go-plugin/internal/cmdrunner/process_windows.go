@@ -1,4 +1,7 @@
-package plugin
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
+package cmdrunner
 
 import (
 	"syscall"
@@ -19,6 +22,7 @@ func _pidAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
+	defer syscall.CloseHandle(h)
 
 	var ec uint32
 	if e := syscall.GetExitCodeProcess(h, &ec); e != nil {

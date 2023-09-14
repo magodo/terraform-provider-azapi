@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package plugin
 
 import (
@@ -23,6 +26,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-plugin/internal/cmdrunner"
+	"github.com/hashicorp/go-plugin/runner"
 	"google.golang.org/grpc"
 )
 
@@ -41,7 +46,7 @@ var managedClientsLock sync.Mutex
 var (
 	// ErrProcessNotFound is returned when a client is instantiated to
 	// reattach to an existing process and it isn't found.
-	ErrProcessNotFound = errors.New("Reattachment process not found")
+	ErrProcessNotFound = cmdrunner.ErrProcessNotFound
 
 	// ErrChecksumsDoNotMatch is returned when binary's checksum doesn't match
 	// the one provided in the SecureConfig.
@@ -76,7 +81,7 @@ type Client struct {
 	exited            bool
 	l                 sync.Mutex
 	address           net.Addr
-	process           *os.Process
+	runner            runner.AttachedRunner
 	client            ClientProtocol
 	protocol          Protocol
 	logger            hclog.Logger
@@ -95,12 +100,27 @@ type Client struct {
 	// processKilled is used for testing only, to flag when the process was
 	// forcefully killed.
 	processKilled bool
+
+	hostSocketDir string
 }
 
 // NegotiatedVersion returns the protocol version negotiated with the server.
 // This is only valid after Start() is called.
 func (c *Client) NegotiatedVersion() int {
 	return c.negotiatedVersion
+}
+
+// ID returns a unique ID for the running plugin. By default this is the process
+// ID (pid), but it could take other forms if RunnerFunc was provided.
+func (c *Client) ID() string {
+	c.l.Lock()
+	defer c.l.Unlock()
+
+	if c.runner != nil {
+		return c.runner.ID()
+	}
+
+	return ""
 }
 
 // ClientConfig is the configuration used to initialize a new
@@ -129,6 +149,13 @@ type ClientConfig struct {
 	// that is already running. This isn't common.
 	Cmd      *exec.Cmd
 	Reattach *ReattachConfig
+
+	// RunnerFunc allows consumers to provide their own implementation of
+	// runner.Runner and control the context within which a plugin is executed.
+	// The cmd argument will have been copied from the config and populated with
+	// environment variables that a go-plugin server expects to read such as
+	// AutoMTLS certs and the magic cookie key.
+	RunnerFunc func(l hclog.Logger, cmd *exec.Cmd, tmpDir string) (runner.Runner, error)
 
 	// SecureConfig is configuration for verifying the integrity of the
 	// executable. It can not be used with Reattach.
@@ -209,6 +236,10 @@ type ClientConfig struct {
 	// to create gRPC connections. This only affects plugins using the gRPC
 	// protocol.
 	GRPCDialOptions []grpc.DialOption
+
+	// SkipHostEnv allows plugins to run without inheriting the parent process'
+	// environment variables.
+	SkipHostEnv bool
 }
 
 // ReattachConfig is used to configure a client to reattach to an
@@ -219,6 +250,11 @@ type ReattachConfig struct {
 	ProtocolVersion int
 	Addr            net.Addr
 	Pid             int
+
+	// ReattachFunc allows consumers to provide their own implementation of
+	// runner.AttachedRunner and attach to something other than a plain process.
+	// At least one of Pid or ReattachFunc must be set.
+	ReattachFunc runner.ReattachFunc
 
 	// Test is set to true if this is reattaching to to a plugin in "test mode"
 	// (see ServeConfig.Test). In this mode, client.Kill will NOT kill the
@@ -299,7 +335,7 @@ func CleanupClients() {
 // plugin and gets the address for the RPC connection.
 //
 // The client must be cleaned up at some point by calling Kill(). If
-// the client is a managed client (created with NewManagedClient) you
+// the client is a managed client (created with ClientConfig.Managed) you
 // can just call CleanupClients at the end of your program and they will
 // be properly cleaned.
 func NewClient(config *ClientConfig) (c *Client) {
@@ -407,12 +443,13 @@ func (c *Client) killed() bool {
 func (c *Client) Kill() {
 	// Grab a lock to read some private fields.
 	c.l.Lock()
-	process := c.process
+	runner := c.runner
 	addr := c.address
+	hostSocketDir := c.hostSocketDir
 	c.l.Unlock()
 
-	// If there is no process, there is nothing to kill.
-	if process == nil {
+	// If there is no runner or ID, there is nothing to kill.
+	if runner == nil || runner.ID() == "" {
 		return
 	}
 
@@ -420,10 +457,14 @@ func (c *Client) Kill() {
 		// Wait for the all client goroutines to finish.
 		c.clientWaitGroup.Wait()
 
+		if hostSocketDir != "" {
+			os.RemoveAll(hostSocketDir)
+		}
+
 		// Make sure there is no reference to the old process after it has been
 		// killed.
 		c.l.Lock()
-		c.process = nil
+		c.runner = nil
 		c.l.Unlock()
 	}()
 
@@ -466,315 +507,17 @@ func (c *Client) Kill() {
 
 	// If graceful exiting failed, just kill it
 	c.logger.Warn("plugin failed to exit gracefully")
-	process.Kill()
+	if err := runner.Kill(context.Background()); err != nil {
+		c.logger.Debug("error killing plugin", "error", err)
+	}
 
 	c.l.Lock()
 	c.processKilled = true
 	c.l.Unlock()
 }
 
-// Starts the underlying subprocess, communicating with it to negotiate
-// a port for RPC connections, and returning the address to connect via RPC.
-//
-// This method is safe to call multiple times. Subsequent calls have no effect.
-// Once a client has been started once, it cannot be started again, even if
-// it was killed.
-func (c *Client) Start() (addr net.Addr, err error) {
-	c.l.Lock()
-	defer c.l.Unlock()
-
-	if c.address != nil {
-		return c.address, nil
-	}
-
-	// If one of cmd or reattach isn't set, then it is an error. We wrap
-	// this in a {} for scoping reasons, and hopeful that the escape
-	// analysis will pop the stack here.
-	{
-		cmdSet := c.config.Cmd != nil
-		attachSet := c.config.Reattach != nil
-		secureSet := c.config.SecureConfig != nil
-		if cmdSet == attachSet {
-			return nil, fmt.Errorf("Only one of Cmd or Reattach must be set")
-		}
-
-		if secureSet && attachSet {
-			return nil, ErrSecureConfigAndReattach
-		}
-	}
-
-	if c.config.Reattach != nil {
-		return c.reattach()
-	}
-
-	if c.config.VersionedPlugins == nil {
-		c.config.VersionedPlugins = make(map[int]PluginSet)
-	}
-
-	// handle all plugins as versioned, using the handshake config as the default.
-	version := int(c.config.ProtocolVersion)
-
-	// Make sure we're not overwriting a real version 0. If ProtocolVersion was
-	// non-zero, then we have to just assume the user made sure that
-	// VersionedPlugins doesn't conflict.
-	if _, ok := c.config.VersionedPlugins[version]; !ok && c.config.Plugins != nil {
-		c.config.VersionedPlugins[version] = c.config.Plugins
-	}
-
-	var versionStrings []string
-	for v := range c.config.VersionedPlugins {
-		versionStrings = append(versionStrings, strconv.Itoa(v))
-	}
-
-	env := []string{
-		fmt.Sprintf("%s=%s", c.config.MagicCookieKey, c.config.MagicCookieValue),
-		fmt.Sprintf("PLUGIN_MIN_PORT=%d", c.config.MinPort),
-		fmt.Sprintf("PLUGIN_MAX_PORT=%d", c.config.MaxPort),
-		fmt.Sprintf("PLUGIN_PROTOCOL_VERSIONS=%s", strings.Join(versionStrings, ",")),
-	}
-
-	cmd := c.config.Cmd
-	cmd.Env = append(cmd.Env, os.Environ()...)
-	cmd.Env = append(cmd.Env, env...)
-	cmd.Stdin = os.Stdin
-
-	cmdStdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	cmdStderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	if c.config.SecureConfig != nil {
-		if ok, err := c.config.SecureConfig.Check(cmd.Path); err != nil {
-			return nil, fmt.Errorf("error verifying checksum: %s", err)
-		} else if !ok {
-			return nil, ErrChecksumsDoNotMatch
-		}
-	}
-
-	// Setup a temporary certificate for client/server mtls, and send the public
-	// certificate to the plugin.
-	if c.config.AutoMTLS {
-		c.logger.Info("configuring client automatic mTLS")
-		certPEM, keyPEM, err := generateCert()
-		if err != nil {
-			c.logger.Error("failed to generate client certificate", "error", err)
-			return nil, err
-		}
-		cert, err := tls.X509KeyPair(certPEM, keyPEM)
-		if err != nil {
-			c.logger.Error("failed to parse client certificate", "error", err)
-			return nil, err
-		}
-
-		cmd.Env = append(cmd.Env, fmt.Sprintf("PLUGIN_CLIENT_CERT=%s", certPEM))
-
-		c.config.TLSConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			ServerName:   "localhost",
-		}
-	}
-
-	c.logger.Debug("starting plugin", "path", cmd.Path, "args", cmd.Args)
-	err = cmd.Start()
-	if err != nil {
-		return
-	}
-
-	// Set the process
-	c.process = cmd.Process
-	c.logger.Debug("plugin started", "path", cmd.Path, "pid", c.process.Pid)
-
-	// Make sure the command is properly cleaned up if there is an error
-	defer func() {
-		r := recover()
-
-		if err != nil || r != nil {
-			cmd.Process.Kill()
-		}
-
-		if r != nil {
-			panic(r)
-		}
-	}()
-
-	// Create a context for when we kill
-	c.doneCtx, c.ctxCancel = context.WithCancel(context.Background())
-
-	// Start goroutine that logs the stderr
-	c.clientWaitGroup.Add(1)
-	c.stderrWaitGroup.Add(1)
-	// logStderr calls Done()
-	go c.logStderr(cmdStderr)
-
-	c.clientWaitGroup.Add(1)
-	go func() {
-		// ensure the context is cancelled when we're done
-		defer c.ctxCancel()
-
-		defer c.clientWaitGroup.Done()
-
-		// get the cmd info early, since the process information will be removed
-		// in Kill.
-		pid := c.process.Pid
-		path := cmd.Path
-
-		// wait to finish reading from stderr since the stderr pipe reader
-		// will be closed by the subsequent call to cmd.Wait().
-		c.stderrWaitGroup.Wait()
-
-		// Wait for the command to end.
-		err := cmd.Wait()
-
-		debugMsgArgs := []interface{}{
-			"path", path,
-			"pid", pid,
-		}
-		if err != nil {
-			debugMsgArgs = append(debugMsgArgs,
-				[]interface{}{"error", err.Error()}...)
-		}
-
-		// Log and make sure to flush the logs write away
-		c.logger.Debug("plugin process exited", debugMsgArgs...)
-		os.Stderr.Sync()
-
-		// Set that we exited, which takes a lock
-		c.l.Lock()
-		defer c.l.Unlock()
-		c.exited = true
-	}()
-
-	// Start a goroutine that is going to be reading the lines
-	// out of stdout
-	linesCh := make(chan string)
-	c.clientWaitGroup.Add(1)
-	go func() {
-		defer c.clientWaitGroup.Done()
-		defer close(linesCh)
-
-		scanner := bufio.NewScanner(cmdStdout)
-		for scanner.Scan() {
-			linesCh <- scanner.Text()
-		}
-	}()
-
-	// Make sure after we exit we read the lines from stdout forever
-	// so they don't block since it is a pipe.
-	// The scanner goroutine above will close this, but track it with a wait
-	// group for completeness.
-	c.clientWaitGroup.Add(1)
-	defer func() {
-		go func() {
-			defer c.clientWaitGroup.Done()
-			for range linesCh {
-			}
-		}()
-	}()
-
-	// Some channels for the next step
-	timeout := time.After(c.config.StartTimeout)
-
-	// Start looking for the address
-	c.logger.Debug("waiting for RPC address", "path", cmd.Path)
-	select {
-	case <-timeout:
-		err = errors.New("timeout while waiting for plugin to start")
-	case <-c.doneCtx.Done():
-		err = errors.New("plugin exited before we could connect")
-	case line := <-linesCh:
-		// Trim the line and split by "|" in order to get the parts of
-		// the output.
-		line = strings.TrimSpace(line)
-		parts := strings.SplitN(line, "|", 6)
-		if len(parts) < 4 {
-			err = fmt.Errorf(
-				"Unrecognized remote plugin message: %s\n\n"+
-					"This usually means that the plugin is either invalid or simply\n"+
-					"needs to be recompiled to support the latest protocol.", line)
-			return
-		}
-
-		// Check the core protocol. Wrapped in a {} for scoping.
-		{
-			var coreProtocol int
-			coreProtocol, err = strconv.Atoi(parts[0])
-			if err != nil {
-				err = fmt.Errorf("Error parsing core protocol version: %s", err)
-				return
-			}
-
-			if coreProtocol != CoreProtocolVersion {
-				err = fmt.Errorf("Incompatible core API version with plugin. "+
-					"Plugin version: %s, Core version: %d\n\n"+
-					"To fix this, the plugin usually only needs to be recompiled.\n"+
-					"Please report this to the plugin author.", parts[0], CoreProtocolVersion)
-				return
-			}
-		}
-
-		// Test the API version
-		version, pluginSet, err := c.checkProtoVersion(parts[1])
-		if err != nil {
-			return addr, err
-		}
-
-		// set the Plugins value to the compatible set, so the version
-		// doesn't need to be passed through to the ClientProtocol
-		// implementation.
-		c.config.Plugins = pluginSet
-		c.negotiatedVersion = version
-		c.logger.Debug("using plugin", "version", version)
-
-		switch parts[2] {
-		case "tcp":
-			addr, err = net.ResolveTCPAddr("tcp", parts[3])
-		case "unix":
-			addr, err = net.ResolveUnixAddr("unix", parts[3])
-		default:
-			err = fmt.Errorf("Unknown address type: %s", parts[3])
-		}
-
-		// If we have a server type, then record that. We default to net/rpc
-		// for backwards compatibility.
-		c.protocol = ProtocolNetRPC
-		if len(parts) >= 5 {
-			c.protocol = Protocol(parts[4])
-		}
-
-		found := false
-		for _, p := range c.config.AllowedProtocols {
-			if p == c.protocol {
-				found = true
-				break
-			}
-		}
-		if !found {
-			err = fmt.Errorf("Unsupported plugin protocol %q. Supported: %v",
-				c.protocol, c.config.AllowedProtocols)
-			return addr, err
-		}
-
-		// See if we have a TLS certificate from the server.
-		// Checking if the length is > 50 rules out catching the unused "extra"
-		// data returned from some older implementations.
-		if len(parts) >= 6 && len(parts[5]) > 50 {
-			err := c.loadServerCert(parts[5])
-			if err != nil {
-				return nil, fmt.Errorf("error parsing server cert: %s", err)
-			}
-		}
-	}
-
-	c.address = addr
-	return
-}
-
 // loadServerCert is used by AutoMTLS to read an x.509 cert returned by the
-// server, and load it as the RootCA for the client TLSConfig.
+// server, and load it as the RootCA and ClientCA for the client TLSConfig.
 func (c *Client) loadServerCert(cert string) error {
 	certPool := x509.NewCertPool()
 
@@ -791,43 +534,35 @@ func (c *Client) loadServerCert(cert string) error {
 	certPool.AddCert(x509Cert)
 
 	c.config.TLSConfig.RootCAs = certPool
+	c.config.TLSConfig.ClientCAs = certPool
 	return nil
 }
 
 func (c *Client) reattach() (net.Addr, error) {
-	// Verify the process still exists. If not, then it is an error
-	p, err := os.FindProcess(c.config.Reattach.Pid)
-	if err != nil {
-		// On Unix systems, FindProcess never returns an error.
-		// On Windows, for non-existent pids it returns:
-		// os.SyscallError - 'OpenProcess: the paremter is incorrect'
-		return nil, ErrProcessNotFound
+	reattachFunc := c.config.Reattach.ReattachFunc
+	// For backwards compatibility default to cmdrunner.ReattachFunc
+	if reattachFunc == nil {
+		reattachFunc = cmdrunner.ReattachFunc(c.config.Reattach.Pid, c.config.Reattach.Addr)
 	}
 
-	// Attempt to connect to the addr since on Unix systems FindProcess
-	// doesn't actually return an error if it can't find the process.
-	conn, err := net.Dial(
-		c.config.Reattach.Addr.Network(),
-		c.config.Reattach.Addr.String())
+	r, err := reattachFunc()
 	if err != nil {
-		p.Kill()
-		return nil, ErrProcessNotFound
+		return nil, err
 	}
-	conn.Close()
 
 	// Create a context for when we kill
 	c.doneCtx, c.ctxCancel = context.WithCancel(context.Background())
 
 	c.clientWaitGroup.Add(1)
 	// Goroutine to mark exit status
-	go func(pid int) {
+	go func(r runner.AttachedRunner) {
 		defer c.clientWaitGroup.Done()
 
 		// ensure the context is cancelled when we're done
 		defer c.ctxCancel()
 
 		// Wait for the process to die
-		pidWait(pid)
+		r.Wait(context.Background())
 
 		// Log so we can see it
 		c.logger.Debug("reattached plugin process exited")
@@ -836,7 +571,7 @@ func (c *Client) reattach() (net.Addr, error) {
 		c.l.Lock()
 		defer c.l.Unlock()
 		c.exited = true
-	}(p.Pid)
+	}(r)
 
 	// Set the address and protocol
 	c.address = c.config.Reattach.Addr
@@ -854,7 +589,7 @@ func (c *Client) reattach() (net.Addr, error) {
 	// process being killed (the only purpose we have for c.process), since
 	// in test mode the process is responsible for exiting on its own.
 	if !c.config.Reattach.Test {
-		c.process = p
+		c.runner = r
 	}
 
 	return c.address, nil
@@ -893,6 +628,9 @@ func (c *Client) checkProtoVersion(protoVersion string) (int, PluginSet, error) 
 //
 // If this returns nil then the process hasn't been started yet. Please
 // call Start or Client before calling this.
+//
+// Clients who specified a RunnerFunc will need to populate their own
+// ReattachFunc in the returned ReattachConfig before it can be used.
 func (c *Client) ReattachConfig() *ReattachConfig {
 	c.l.Lock()
 	defer c.l.Unlock()
@@ -910,11 +648,16 @@ func (c *Client) ReattachConfig() *ReattachConfig {
 		return c.config.Reattach
 	}
 
-	return &ReattachConfig{
+	reattach := &ReattachConfig{
 		Protocol: c.protocol,
 		Addr:     c.address,
-		Pid:      c.config.Cmd.Process.Pid,
 	}
+
+	if c.config.Cmd != nil && c.config.Cmd.Process != nil {
+		reattach.Pid = c.config.Cmd.Process.Pid
+	}
+
+	return reattach
 }
 
 // Protocol returns the protocol of server on the remote end. This will
@@ -929,22 +672,6 @@ func (c *Client) Protocol() Protocol {
 	}
 
 	return c.protocol
-}
-
-func netAddrDialer(addr net.Addr) func(string, time.Duration) (net.Conn, error) {
-	return func(_ string, _ time.Duration) (net.Conn, error) {
-		// Connect to the client
-		conn, err := net.Dial(addr.Network(), addr.String())
-		if err != nil {
-			return nil, err
-		}
-		if tcpConn, ok := conn.(*net.TCPConn); ok {
-			// Make sure to set keep alive so that the connection doesn't die
-			tcpConn.SetKeepAlive(true)
-		}
-
-		return conn, nil
-	}
 }
 
 // dialer is compatible with grpc.WithDialer and creates the connection
@@ -966,10 +693,10 @@ func (c *Client) dialer(_ string, timeout time.Duration) (net.Conn, error) {
 
 var stdErrBufferSize = 64 * 1024
 
-func (c *Client) logStderr(r io.Reader) {
+func (c *Client) logStderr(name string, r io.Reader) {
 	defer c.clientWaitGroup.Done()
 	defer c.stderrWaitGroup.Done()
-	l := c.logger.Named(filepath.Base(c.config.Cmd.Path))
+	l := c.logger.Named(filepath.Base(name))
 
 	reader := bufio.NewReaderSize(r, stdErrBufferSize)
 	// continuation indicates the previous line was a prefix

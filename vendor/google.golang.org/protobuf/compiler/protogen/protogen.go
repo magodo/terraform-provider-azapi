@@ -39,7 +39,7 @@ import (
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
-const goPackageDocURL = "https://developers.google.com/protocol-buffers/docs/reference/go-generated#package"
+const goPackageDocURL = "https://protobuf.dev/reference/go/go-generated#package"
 
 // Run executes a function as a protoc plugin.
 //
@@ -472,7 +472,7 @@ func newFile(gen *Plugin, p *descriptorpb.FileDescriptorProto, packageName GoPac
 }
 
 // splitImportPathAndPackageName splits off the optional Go package name
-// from the Go import path when seperated by a ';' delimiter.
+// from the Go import path when separated by a ';' delimiter.
 func splitImportPathAndPackageName(s string) (GoImportPath, GoPackageName) {
 	if i := strings.Index(s, ";"); i >= 0 {
 		return GoImportPath(s[:i]), GoPackageName(s[i+1:])

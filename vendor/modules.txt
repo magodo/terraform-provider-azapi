@@ -10,7 +10,7 @@ cloud.google.com/go/internal/version
 # cloud.google.com/go/storage v1.10.0
 ## explicit; go 1.11
 cloud.google.com/go/storage
-# github.com/Azure/azure-sdk-for-go/sdk/azcore v1.7.1
+# github.com/Azure/azure-sdk-for-go/sdk/azcore v1.8.0-beta.3.0.20230914020935-eb06afead95f
 ## explicit; go 1.18
 github.com/Azure/azure-sdk-for-go/sdk/azcore
 github.com/Azure/azure-sdk-for-go/sdk/azcore/arm
@@ -23,6 +23,7 @@ github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/log
 github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/pollers
 github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/pollers/async
 github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/pollers/body
+github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/pollers/fake
 github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/pollers/loc
 github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/pollers/op
 github.com/Azure/azure-sdk-for-go/sdk/azcore/internal/shared
@@ -140,12 +141,17 @@ github.com/golang/protobuf/ptypes/any
 github.com/golang/protobuf/ptypes/duration
 github.com/golang/protobuf/ptypes/empty
 github.com/golang/protobuf/ptypes/timestamp
-# github.com/google/uuid v1.3.0
+# github.com/google/uuid v1.3.1
 ## explicit
 github.com/google/uuid
 # github.com/googleapis/gax-go/v2 v2.0.5
 ## explicit
 github.com/googleapis/gax-go/v2
+# github.com/hack-pad/safejs v0.1.1
+## explicit; go 1.18
+github.com/hack-pad/safejs
+github.com/hack-pad/safejs/internal/catch
+github.com/hack-pad/safejs/internal/stackerr
 # github.com/hashicorp/errwrap v1.1.0
 ## explicit
 github.com/hashicorp/errwrap
@@ -176,10 +182,13 @@ github.com/hashicorp/go-hclog
 # github.com/hashicorp/go-multierror v1.1.1
 ## explicit; go 1.13
 github.com/hashicorp/go-multierror
-# github.com/hashicorp/go-plugin v1.4.2
-## explicit; go 1.13
+# github.com/hashicorp/go-plugin v1.4.2 => github.com/magodo/go-plugin v1.4.2-0.20230914083440-5d1381c1ae5a
+## explicit; go 1.21.0
 github.com/hashicorp/go-plugin
+github.com/hashicorp/go-plugin/internal/cmdrunner
 github.com/hashicorp/go-plugin/internal/plugin
+github.com/hashicorp/go-plugin/internal/wasmrunner
+github.com/hashicorp/go-plugin/runner
 # github.com/hashicorp/go-safetemp v1.0.0
 ## explicit
 github.com/hashicorp/go-safetemp
@@ -260,6 +269,17 @@ github.com/klauspost/compress/zstd/internal/xxhash
 ## explicit; go 1.11
 github.com/kylelemons/godebug/diff
 github.com/kylelemons/godebug/pretty
+# github.com/magodo/chanio v0.0.0-20230905063744-5f1bf45eacbc
+## explicit; go 1.21.0
+github.com/magodo/chanio
+# github.com/magodo/go-wasmww v0.0.0-20230914064632-eea21c04fd19
+## explicit; go 1.21.0
+github.com/magodo/go-wasmww
+# github.com/magodo/go-webworkers v0.0.0-20230912130354-7cb7781df4ee
+## explicit; go 1.19
+github.com/magodo/go-webworkers/sharedworker
+github.com/magodo/go-webworkers/types
+github.com/magodo/go-webworkers/worker
 # github.com/mattn/go-colorable v0.1.8
 ## explicit; go 1.13
 github.com/mattn/go-colorable
@@ -290,6 +310,9 @@ github.com/oklog/run
 # github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8
 ## explicit; go 1.14
 github.com/pkg/browser
+# github.com/pkg/errors v0.9.1
+## explicit
+github.com/pkg/errors
 # github.com/ulikunitz/xz v0.5.8
 ## explicit; go 1.12
 github.com/ulikunitz/xz
@@ -491,8 +514,8 @@ google.golang.org/grpc/serviceconfig
 google.golang.org/grpc/stats
 google.golang.org/grpc/status
 google.golang.org/grpc/tap
-# google.golang.org/protobuf v1.27.1
-## explicit; go 1.9
+# google.golang.org/protobuf v1.28.2-0.20230222093303-bc1253ad3743
+## explicit; go 1.11
 google.golang.org/protobuf/cmd/protoc-gen-go/internal_gengo
 google.golang.org/protobuf/compiler/protogen
 google.golang.org/protobuf/encoding/prototext
@@ -527,3 +550,4 @@ google.golang.org/protobuf/types/known/durationpb
 google.golang.org/protobuf/types/known/emptypb
 google.golang.org/protobuf/types/known/timestamppb
 google.golang.org/protobuf/types/pluginpb
+# github.com/hashicorp/go-plugin => github.com/magodo/go-plugin v1.4.2-0.20230914083440-5d1381c1ae5a

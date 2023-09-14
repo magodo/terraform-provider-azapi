@@ -1,7 +1,7 @@
 module github.com/Azure/terraform-provider-azapi
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.7.1
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.8.0-beta.3.0.20230914020935-eb06afead95f
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.3.0
 	github.com/hashicorp/go-azure-helpers v0.19.0
 	github.com/hashicorp/go-cty v1.4.1-0.20200414143053-d3edf31b6320
@@ -24,8 +24,9 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
-	github.com/google/uuid v1.3.0 // indirect
+	github.com/google/uuid v1.3.1 // indirect
 	github.com/googleapis/gax-go/v2 v2.0.5 // indirect
+	github.com/hack-pad/safejs v0.1.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-checkpoint v0.5.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
@@ -45,6 +46,9 @@ require (
 	github.com/jstemmer/go-junit-report v0.9.1 // indirect
 	github.com/klauspost/compress v1.11.2 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
+	github.com/magodo/chanio v0.0.0-20230905063744-5f1bf45eacbc // indirect
+	github.com/magodo/go-wasmww v0.0.0-20230914064632-eea21c04fd19 // indirect
+	github.com/magodo/go-webworkers v0.0.0-20230912130354-7cb7781df4ee // indirect
 	github.com/mattn/go-colorable v0.1.8 // indirect
 	github.com/mattn/go-isatty v0.0.13 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
@@ -55,6 +59,7 @@ require (
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/ulikunitz/xz v0.5.8 // indirect
 	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect
 	github.com/zclconf/go-cty v1.9.1 // indirect
@@ -71,7 +76,11 @@ require (
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20210629200056-84d6f6074151 // indirect
 	google.golang.org/grpc v1.39.0 // indirect
-	google.golang.org/protobuf v1.27.1 // indirect
+	google.golang.org/protobuf v1.28.2-0.20230222093303-bc1253ad3743 // indirect
 )
 
-go 1.18
+go 1.21.0
+
+toolchain go1.21.1
+
+replace github.com/hashicorp/go-plugin => github.com/magodo/go-plugin v1.4.2-0.20230914083440-5d1381c1ae5a
