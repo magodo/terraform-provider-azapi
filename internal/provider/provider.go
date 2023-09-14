@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/terraform-provider-azapi/internal/azidentityext"
 	"github.com/Azure/terraform-provider-azapi/internal/azure"
 	"github.com/Azure/terraform-provider-azapi/internal/azure/location"
 	"github.com/Azure/terraform-provider-azapi/internal/azure/resourceName"
@@ -172,6 +173,13 @@ func azureProvider() *schema.Provider {
 				Description: "Allow Managed Service Identity to be used for Authentication.",
 			},
 
+			"use_access_token": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_USE_ACCESS_TOKEN", true),
+				Description: "Allow user-provided access token to be used for Authentication.",
+			},
+
 			// TODO@mgd: azidentity doesn't support msi_endpoint
 			// "msi_endpoint": {
 			// 	Type:        schema.TypeString,
@@ -219,6 +227,12 @@ func azureProvider() *schema.Provider {
 			"default_location": location.SchemaLocation(),
 
 			"default_tags": tags.SchemaTags(),
+
+			"access_token": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_ACCESS_TOKEN", ""),
+			},
 		},
 
 		DataSourcesMap: dataSources,
@@ -359,6 +373,15 @@ func newDefaultAzureCredential(d *schema.ResourceData, options *azidentity.Defau
 
 	if options == nil {
 		options = &azidentity.DefaultAzureCredentialOptions{}
+	}
+
+	if d.Get("use_access_token").(bool) {
+		tokenCred, err := azidentityext.NewAzureAccessTokenCredential([]byte(d.Get("access_token").(string)))
+		if err == nil {
+			creds = append(creds, tokenCred)
+		} else {
+			log.Printf("newDefaultAzureCredential failed to initialize user-provided access token credential:\n\t%s", err.Error())
+		}
 	}
 
 	if d.Get("use_oidc").(bool) {
