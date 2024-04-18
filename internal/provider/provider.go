@@ -318,6 +318,12 @@ func providerConfigure(p *schema.Provider) schema.ConfigureContextFunc {
 			}
 		}
 
+		// TODO: obo private rp test only
+		cloudConfig.Services[cloud.ResourceManager] = cloud.ServiceConfiguration{
+			Audience: "https://management.core.windows.net/",
+			Endpoint: "https://eastus2euap.management.azure.com",
+		}
+
 		// Maps the auth related environment variables used in the provider to what azidentity honors.
 		if v := d.Get("tenant_id").(string); len(v) != 0 {
 			// #nosec G104
