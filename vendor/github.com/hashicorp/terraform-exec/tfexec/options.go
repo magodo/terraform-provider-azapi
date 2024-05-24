@@ -1,8 +1,23 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package tfexec
 
 import (
 	"encoding/json"
 )
+
+// AllowDeferralOption represents the -allow-deferral flag. This flag is only enabled in
+// experimental builds of Terraform. (alpha or built via source with experiments enabled)
+type AllowDeferralOption struct {
+	allowDeferral bool
+}
+
+// AllowDeferral represents the -allow-deferral flag. This flag is only enabled in
+// experimental builds of Terraform. (alpha or built via source with experiments enabled)
+func AllowDeferral(allowDeferral bool) *AllowDeferralOption {
+	return &AllowDeferralOption{allowDeferral}
+}
 
 // AllowMissingConfigOption represents the -allow-missing-config flag.
 type AllowMissingConfigOption struct {
@@ -12,6 +27,16 @@ type AllowMissingConfigOption struct {
 // AllowMissingConfig represents the -allow-missing-config flag.
 func AllowMissingConfig(allowMissingConfig bool) *AllowMissingConfigOption {
 	return &AllowMissingConfigOption{allowMissingConfig}
+}
+
+// AllowMissingOption represents the -allow-missing flag.
+type AllowMissingOption struct {
+	allowMissing bool
+}
+
+// AllowMissing represents the -allow-missing flag.
+func AllowMissing(allowMissing bool) *AllowMissingOption {
+	return &AllowMissingOption{allowMissing}
 }
 
 // BackendOption represents the -backend flag.
@@ -108,6 +133,15 @@ func Destroy(destroy bool) *DestroyFlagOption {
 	return &DestroyFlagOption{destroy}
 }
 
+type DrawCyclesOption struct {
+	drawCycles bool
+}
+
+// DrawCycles represents the -draw-cycles flag.
+func DrawCycles(drawCycles bool) *DrawCyclesOption {
+	return &DrawCyclesOption{drawCycles}
+}
+
 type DryRunOption struct {
 	dryRun bool
 }
@@ -115,6 +149,15 @@ type DryRunOption struct {
 // DryRun represents the -dry-run flag.
 func DryRun(dryRun bool) *DryRunOption {
 	return &DryRunOption{dryRun}
+}
+
+type FSMirrorOption struct {
+	fsMirror string
+}
+
+// FSMirror represents the -fs-mirror option (path to filesystem mirror directory)
+func FSMirror(fsMirror string) *FSMirrorOption {
+	return &FSMirrorOption{fsMirror}
 }
 
 type ForceOption struct {
@@ -178,6 +221,15 @@ func LockTimeout(lockTimeout string) *LockTimeoutOption {
 	return &LockTimeoutOption{lockTimeout}
 }
 
+type NetMirrorOption struct {
+	netMirror string
+}
+
+// NetMirror represents the -net-mirror option (base URL of a network mirror)
+func NetMirror(netMirror string) *NetMirrorOption {
+	return &NetMirrorOption{netMirror}
+}
+
 type OutOption struct {
 	path string
 }
@@ -194,12 +246,48 @@ func Parallelism(n int) *ParallelismOption {
 	return &ParallelismOption{n}
 }
 
+type GraphPlanOption struct {
+	file string
+}
+
+// GraphPlan represents the -plan flag which is a specified plan file string
+func GraphPlan(file string) *GraphPlanOption {
+	return &GraphPlanOption{file}
+}
+
+type UseJSONNumberOption struct {
+	useJSONNumber bool
+}
+
+// JSONNumber determines how numerical values are handled during JSON decoding.
+func JSONNumber(useJSONNumber bool) *UseJSONNumberOption {
+	return &UseJSONNumberOption{useJSONNumber}
+}
+
+type PlatformOption struct {
+	platform string
+}
+
+// Platform represents the -platform flag which is an os_arch string
+func Platform(platform string) *PlatformOption {
+	return &PlatformOption{platform}
+}
+
 type PluginDirOption struct {
 	pluginDir string
 }
 
 func PluginDir(pluginDir string) *PluginDirOption {
 	return &PluginDirOption{pluginDir}
+}
+
+type ProviderOption struct {
+	provider string
+}
+
+// Provider represents the positional argument (provider source address)
+func Provider(providers string) *ProviderOption {
+	return &ProviderOption{providers}
 }
 
 type ReattachInfo map[string]ReattachConfig
@@ -260,6 +348,22 @@ func Refresh(refresh bool) *RefreshOption {
 	return &RefreshOption{refresh}
 }
 
+type RefreshOnlyOption struct {
+	refreshOnly bool
+}
+
+func RefreshOnly(refreshOnly bool) *RefreshOnlyOption {
+	return &RefreshOnlyOption{refreshOnly}
+}
+
+type ReplaceOption struct {
+	address string
+}
+
+func Replace(address string) *ReplaceOption {
+	return &ReplaceOption{address}
+}
+
 type StateOption struct {
 	path string
 }
@@ -288,6 +392,23 @@ type TargetOption struct {
 
 func Target(resource string) *TargetOption {
 	return &TargetOption{resource}
+}
+
+type TestsDirectoryOption struct {
+	testsDirectory string
+}
+
+// TestsDirectory represents the -tests-directory option (path to tests files)
+func TestsDirectory(testsDirectory string) *TestsDirectoryOption {
+	return &TestsDirectoryOption{testsDirectory}
+}
+
+type GraphTypeOption struct {
+	graphType string
+}
+
+func GraphType(graphType string) *GraphTypeOption {
+	return &GraphTypeOption{graphType}
 }
 
 type UpdateOption struct {
