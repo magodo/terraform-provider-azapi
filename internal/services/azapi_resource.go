@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -598,17 +597,17 @@ func (r *AzapiResource) Read(ctx context.Context, request resource.ReadRequest, 
 		return
 	}
 
-	client := r.ProviderData.ResourceClient
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion)
-	if err != nil {
-		if utils.ResponseErrorWasNotFound(err) {
-			tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
-			response.State.RemoveResource(ctx)
-			return
-		}
-		response.Diagnostics.AddError("Failed to retrieve resource", fmt.Errorf("reading %s: %+v", id, err).Error())
-		return
-	}
+	// client := r.ProviderData.ResourceClient
+	// responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion)
+	// if err != nil {
+	// 	if utils.ResponseErrorWasNotFound(err) {
+	// 		tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
+	// 		response.State.RemoveResource(ctx)
+	// 		return
+	// 	}
+	// 	response.Diagnostics.AddError("Failed to retrieve resource", fmt.Errorf("reading %s: %+v", id, err).Error())
+	// 	return
+	// }
 
 	state := model
 	state.Name = types.StringValue(id.Name)
@@ -621,88 +620,88 @@ func (r *AzapiResource) Read(ctx context.Context, request resource.ReadRequest, 
 		return
 	}
 
-	if bodyMap, ok := responseBody.(map[string]interface{}); ok {
-		if v, ok := bodyMap["location"]; ok && v != nil && location.Normalize(v.(string)) != location.Normalize(model.Location.ValueString()) {
-			state.Location = types.StringValue(v.(string))
-		}
-		if output := tags.FlattenTags(bodyMap["tags"]); len(output.Elements()) != 0 || len(state.Tags.Elements()) != 0 {
-			state.Tags = output
-		}
-		if requestBody["identity"] == nil {
-			// The following codes are used to reflect the actual changes of identity when it's not configured inside the body.
-			// And it suppresses the diff of nil identity and identity whose type is none.
-			identityFromResponse := identity.FlattenIdentity(bodyMap["identity"])
-			switch {
-			// Identity is not specified in config, and it's not in the response
-			case state.Identity.IsNull() && (identityFromResponse == nil || identityFromResponse.Type.ValueString() == string(identity.None)):
-				state.Identity = basetypes.NewListNull(identity.Model{}.ModelType())
+	// if bodyMap, ok := responseBody.(map[string]interface{}); ok {
+	// 	if v, ok := bodyMap["location"]; ok && v != nil && location.Normalize(v.(string)) != location.Normalize(model.Location.ValueString()) {
+	// 		state.Location = types.StringValue(v.(string))
+	// 	}
+	// 	if output := tags.FlattenTags(bodyMap["tags"]); len(output.Elements()) != 0 || len(state.Tags.Elements()) != 0 {
+	// 		state.Tags = output
+	// 	}
+	// 	if requestBody["identity"] == nil {
+	// 		// The following codes are used to reflect the actual changes of identity when it's not configured inside the body.
+	// 		// And it suppresses the diff of nil identity and identity whose type is none.
+	// 		identityFromResponse := identity.FlattenIdentity(bodyMap["identity"])
+	// 		switch {
+	// 		// Identity is not specified in config, and it's not in the response
+	// 		case state.Identity.IsNull() && (identityFromResponse == nil || identityFromResponse.Type.ValueString() == string(identity.None)):
+	// 			state.Identity = basetypes.NewListNull(identity.Model{}.ModelType())
 
-			// Identity is not specified in config, but it's in the response
-			case state.Identity.IsNull() && identityFromResponse != nil && identityFromResponse.Type.ValueString() != string(identity.None):
-				state.Identity = identity.ToList(*identityFromResponse)
+	// 		// Identity is not specified in config, but it's in the response
+	// 		case state.Identity.IsNull() && identityFromResponse != nil && identityFromResponse.Type.ValueString() != string(identity.None):
+	// 			state.Identity = identity.ToList(*identityFromResponse)
 
-			// Identity is specified in config, but it's not in the response
-			case !state.Identity.IsNull() && identityFromResponse == nil:
-				stateIdentity := identity.FromList(state.Identity)
-				// skip when the configured identity type is none
-				if stateIdentity.Type.ValueString() == string(identity.None) {
-					// do nothing
-				} else {
-					state.Identity = basetypes.NewListNull(identity.Model{}.ModelType())
-				}
+	// 		// Identity is specified in config, but it's not in the response
+	// 		case !state.Identity.IsNull() && identityFromResponse == nil:
+	// 			stateIdentity := identity.FromList(state.Identity)
+	// 			// skip when the configured identity type is none
+	// 			if stateIdentity.Type.ValueString() == string(identity.None) {
+	// 				// do nothing
+	// 			} else {
+	// 				state.Identity = basetypes.NewListNull(identity.Model{}.ModelType())
+	// 			}
 
-			// Identity is specified in config, and it's in the response
-			case !state.Identity.IsNull() && identityFromResponse != nil:
-				stateIdentity := identity.FromList(state.Identity)
-				// suppress the diff of identity_ids = [] and identity_ids = null
-				if len(stateIdentity.IdentityIDs.Elements()) == 0 && len(identityFromResponse.IdentityIDs.Elements()) == 0 {
-					// to suppress the diff of identity_ids = [] and identity_ids = null
-					identityFromResponse.IdentityIDs = stateIdentity.IdentityIDs
-				}
-				state.Identity = identity.ToList(*identityFromResponse)
-			}
-		}
-	}
+	// 		// Identity is specified in config, and it's in the response
+	// 		case !state.Identity.IsNull() && identityFromResponse != nil:
+	// 			stateIdentity := identity.FromList(state.Identity)
+	// 			// suppress the diff of identity_ids = [] and identity_ids = null
+	// 			if len(stateIdentity.IdentityIDs.Elements()) == 0 && len(identityFromResponse.IdentityIDs.Elements()) == 0 {
+	// 				// to suppress the diff of identity_ids = [] and identity_ids = null
+	// 				identityFromResponse.IdentityIDs = stateIdentity.IdentityIDs
+	// 			}
+	// 			state.Identity = identity.ToList(*identityFromResponse)
+	// 		}
+	// 	}
+	// }
 
-	if ignoreBodyChanges := AsStringList(model.IgnoreBodyChanges); len(ignoreBodyChanges) != 0 {
-		if out, err := overrideWithPaths(responseBody, requestBody, ignoreBodyChanges); err == nil {
-			responseBody = out
-		} else {
-			response.Diagnostics.AddError("Invalid configuration", fmt.Sprintf(`The argument "ignore_body_changes" is invalid: value: %s, err: %+v`, model.IgnoreBodyChanges.String(), err))
-			return
-		}
-	}
+	// if ignoreBodyChanges := AsStringList(model.IgnoreBodyChanges); len(ignoreBodyChanges) != 0 {
+	// 	if out, err := overrideWithPaths(responseBody, requestBody, ignoreBodyChanges); err == nil {
+	// 		responseBody = out
+	// 	} else {
+	// 		response.Diagnostics.AddError("Invalid configuration", fmt.Sprintf(`The argument "ignore_body_changes" is invalid: value: %s, err: %+v`, model.IgnoreBodyChanges.String(), err))
+	// 		return
+	// 	}
+	// }
 
-	option := utils.UpdateJsonOption{
-		IgnoreCasing:          model.IgnoreCasing.ValueBool(),
-		IgnoreMissingProperty: model.IgnoreMissingProperty.ValueBool(),
-	}
-	body := utils.UpdateObject(requestBody, responseBody, option)
+	// option := utils.UpdateJsonOption{
+	// 	IgnoreCasing:          model.IgnoreCasing.ValueBool(),
+	// 	IgnoreMissingProperty: model.IgnoreMissingProperty.ValueBool(),
+	// }
+	// body := utils.UpdateObject(requestBody, responseBody, option)
 
-	data, err := json.Marshal(body)
-	if err != nil {
-		response.Diagnostics.AddError("Invalid body", err.Error())
-		return
-	}
+	// 	data, err := json.Marshal(body)
+	// 	if err != nil {
+	// 		response.Diagnostics.AddError("Invalid body", err.Error())
+	// 		return
+	// 	}
 
-	if dynamicIsString(model.Body) {
-		state.Body = types.DynamicValue(types.StringValue(string(data)))
-		state.Output = types.DynamicValue(types.StringValue(flattenOutput(responseBody, AsStringList(model.ResponseExportValues))))
-	} else {
-		state.Output = types.DynamicValue(flattenOutputPayload(responseBody, AsStringList(model.ResponseExportValues)))
-		if !model.Body.IsNull() {
-			payload, err := dynamic.FromJSON(data, model.Body.UnderlyingValue().Type(ctx))
-			if err != nil {
-				tflog.Warn(ctx, fmt.Sprintf("Failed to parse payload: %s", err.Error()))
-				payload, err = dynamic.FromJSONImplied(data)
-				if err != nil {
-					response.Diagnostics.AddError("Invalid payload", err.Error())
-					return
-				}
-			}
-			state.Body = payload
-		}
-	}
+	// 	if dynamicIsString(model.Body) {
+	// 		state.Body = types.DynamicValue(types.StringValue(string(data)))
+	// 		state.Output = types.DynamicValue(types.StringValue(flattenOutput(responseBody, AsStringList(model.ResponseExportValues))))
+	// 	} else {
+	// 		state.Output = types.DynamicValue(flattenOutputPayload(responseBody, AsStringList(model.ResponseExportValues)))
+	// 		if !model.Body.IsNull() {
+	// 			payload, err := dynamic.FromJSON(data, model.Body.UnderlyingValue().Type(ctx))
+	// 			if err != nil {
+	// 				tflog.Warn(ctx, fmt.Sprintf("Failed to parse payload: %s", err.Error()))
+	// 				payload, err = dynamic.FromJSONImplied(data)
+	// 				if err != nil {
+	// 					response.Diagnostics.AddError("Invalid payload", err.Error())
+	// 					return
+	// 				}
+	// 			}
+	// 			state.Body = payload
+	// 		}
+	// 	}
 
 	response.Diagnostics.Append(response.State.Set(ctx, state)...)
 }
@@ -765,7 +764,7 @@ func (r *AzapiResource) ImportState(ctx context.Context, request resource.Import
 		return
 	}
 
-	client := r.ProviderData.ResourceClient
+	//client := r.ProviderData.ResourceClient
 
 	state := AzapiResourceModel{
 		ID:                      types.StringValue(id.ID()),
@@ -793,62 +792,62 @@ func (r *AzapiResource) ImportState(ctx context.Context, request resource.Import
 		},
 	}
 
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion)
-	if err != nil {
-		if utils.ResponseErrorWasNotFound(err) {
-			tflog.Info(ctx, fmt.Sprintf("[INFO] Error reading %q - removing from state", id.ID()))
-			response.State.RemoveResource(ctx)
-			return
-		}
-		response.Diagnostics.AddError("Failed to retrieve resource", fmt.Errorf("reading %s: %+v", id, err).Error())
-		return
-	}
+	// responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion)
+	// if err != nil {
+	// 	if utils.ResponseErrorWasNotFound(err) {
+	// 		tflog.Info(ctx, fmt.Sprintf("[INFO] Error reading %q - removing from state", id.ID()))
+	// 		response.State.RemoveResource(ctx)
+	// 		return
+	// 	}
+	// 	response.Diagnostics.AddError("Failed to retrieve resource", fmt.Errorf("reading %s: %+v", id, err).Error())
+	// 	return
+	// }
 
-	tflog.Info(ctx, fmt.Sprintf("resource %q is imported", id.ID()))
-	if id.ResourceDef != nil {
-		writeOnlyBody := (*id.ResourceDef).GetWriteOnly(utils.NormalizeObject(responseBody))
-		if bodyMap, ok := writeOnlyBody.(map[string]interface{}); ok {
-			delete(bodyMap, "location")
-			delete(bodyMap, "tags")
-			delete(bodyMap, "name")
-			delete(bodyMap, "identity")
-			writeOnlyBody = bodyMap
-		}
-		data, err := json.Marshal(writeOnlyBody)
-		if err != nil {
-			response.Diagnostics.AddError("Invalid body", err.Error())
-			return
-		}
-		payload, err := dynamic.FromJSONImplied(data)
-		if err != nil {
-			response.Diagnostics.AddError("Invalid payload", err.Error())
-			return
-		}
-		state.Body = payload
-	} else {
-		data, err := json.Marshal(responseBody)
-		if err != nil {
-			response.Diagnostics.AddError("Invalid body", err.Error())
-			return
-		}
-		payload, err := dynamic.FromJSONImplied(data)
-		if err != nil {
-			response.Diagnostics.AddError("Invalid payload", err.Error())
-			return
-		}
-		state.Body = payload
-	}
-	if bodyMap, ok := responseBody.(map[string]interface{}); ok {
-		if v, ok := bodyMap["location"]; ok && v != nil {
-			state.Location = types.StringValue(location.Normalize(v.(string)))
-		}
-		if output := tags.FlattenTags(bodyMap["tags"]); len(output.Elements()) != 0 {
-			state.Tags = output
-		}
-		if v := identity.FlattenIdentity(bodyMap["identity"]); v != nil {
-			state.Identity = identity.ToList(*v)
-		}
-	}
+	// tflog.Info(ctx, fmt.Sprintf("resource %q is imported", id.ID()))
+	// if id.ResourceDef != nil {
+	// 	writeOnlyBody := (*id.ResourceDef).GetWriteOnly(utils.NormalizeObject(responseBody))
+	// 	if bodyMap, ok := writeOnlyBody.(map[string]interface{}); ok {
+	// 		delete(bodyMap, "location")
+	// 		delete(bodyMap, "tags")
+	// 		delete(bodyMap, "name")
+	// 		delete(bodyMap, "identity")
+	// 		writeOnlyBody = bodyMap
+	// 	}
+	// 	data, err := json.Marshal(writeOnlyBody)
+	// 	if err != nil {
+	// 		response.Diagnostics.AddError("Invalid body", err.Error())
+	// 		return
+	// 	}
+	// 	payload, err := dynamic.FromJSONImplied(data)
+	// 	if err != nil {
+	// 		response.Diagnostics.AddError("Invalid payload", err.Error())
+	// 		return
+	// 	}
+	// 	state.Body = payload
+	// } else {
+	// data, err := json.Marshal(responseBody)
+	// if err != nil {
+	// 	response.Diagnostics.AddError("Invalid body", err.Error())
+	// 	return
+	// }
+	// payload, err := dynamic.FromJSONImplied(data)
+	// if err != nil {
+	// 	response.Diagnostics.AddError("Invalid payload", err.Error())
+	// 	return
+	// }
+	// state.Body = payload
+	// }
+	// if bodyMap, ok := responseBody.(map[string]interface{}); ok {
+	// 	if v, ok := bodyMap["location"]; ok && v != nil {
+	// 		state.Location = types.StringValue(location.Normalize(v.(string)))
+	// 	}
+	// 	if output := tags.FlattenTags(bodyMap["tags"]); len(output.Elements()) != 0 {
+	// 		state.Tags = output
+	// 	}
+	// 	if v := identity.FlattenIdentity(bodyMap["identity"]); v != nil {
+	// 		state.Identity = identity.ToList(*v)
+	// 	}
+	// }
 
 	response.Diagnostics.Append(response.State.Set(ctx, state)...)
 }
