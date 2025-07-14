@@ -38,6 +38,7 @@ type Option struct {
 	SubscriptionId              string
 	TenantId                    string
 	CustomHeaders               http.Header
+	MaxGoSdkRetries             int32
 }
 
 // NOTE: it should be possible for this method to become Private once the top level Client's removed
@@ -105,6 +106,7 @@ func (client *Client) Build(ctx context.Context, o *Option) error {
 			},
 			PerCallPolicies:  perCallPolicies,
 			PerRetryPolicies: perRetryPolicies,
+			Retry:            policy.RetryOptions{MaxRetries: o.MaxGoSdkRetries},
 		},
 		DisableRPRegistration: o.SkipProviderRegistration,
 	})
@@ -127,6 +129,7 @@ func (client *Client) Build(ctx context.Context, o *Option) error {
 			},
 			PerCallPolicies:  perCallPolicies,
 			PerRetryPolicies: perRetryPolicies,
+			Retry:            policy.RetryOptions{MaxRetries: o.MaxGoSdkRetries},
 		},
 		DisableRPRegistration: o.SkipProviderRegistration,
 	})

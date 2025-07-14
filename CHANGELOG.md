@@ -1,15 +1,41 @@
-## v2.3.0 (unreleased)
+## v2.4.0 (unreleased)
+
+FEATURES:
+- **New Provider Function**: unique_string
+
+ENHANCEMENTS:
+- `azapi_resource` resource: Support schema validation in `terraform validate`.
+- `azapi_resource` resource: Preflight validation supports nested resources.
+- `azapi` resources/data sources: Support `User-Agent` header, which is used to specify the user agent which is appended to the default user agent.
+- `azapi_resource`, `azapi_update_resource` resources: Support `sensitive_body` field, which is used to specify the write-only properties in the request body.
+- Update bicep types to https://github.com/ms-henglu/bicep-types-az/commit/0ce6ee9ce836e6847eaa92a6ac4ecd7ef4b89d0b
+
+BUG FIXES:
+- Fix a bug that `azapi_update_resource` resource produced inconsistent results when only `error_message_regex` is changed.
+- Fix a bug that `azapi_resource_action` resource could not be migrated correctly when the `body` is empty string.
+- Fix a bug that after moving resource from `azurerm` provider, the `azapi_resource` resource could not be updated correctly.
+- Fix a bug that `azapi_resource` is replaced if the API returns a readonly location.
+- Fix a bug that resource group's api-version `2024-11-01` is disabled in the provider.
+
+## v2.3.0
 FEATURES:
 - **New Ephemeral Resource**: azapi_resource_action
 
 ENHANCEMENTS:
 - `azapi` provider: The `oidc_azure_service_connection_id` field can be sourced from the `ARM_ADO_PIPELINE_SERVICE_CONNECTION_ID` or `ARM_OIDC_AZURE_SERVICE_CONNECTION_ID` Environment Variables.
+- `azapi` provider: The `enable_preflight` field can be sourced from the `ARM_ENABLE_PREFLIGHT` Environment Variable.
+- `azapi` provider: The `disable_default_output` field can be sourced from the `ARM_DISABLE_DEFAULT_OUTPUT` Environment Variable.
+- `azapi` provider: Support `maximum_busy_retry_attempts` field, which is used to specify the maximum number of busy retry attempts if the Azure API returns an HTTP 408, 429, 500, 502, 503, or 504 response.
 - `azapi_resource_action` resource, data source: Support `sensitive_response_export_values` field, which is used to specify the sensitive fields to export.
 - `azaapi_resource_action` resource, data source: Support `sensitive_output` field, which is a sensitive computed field that contains the fields exported by `sensitive_response_export_values`.
+- Update bicep types to https://github.com/ms-henglu/bicep-types-az/commit/c4c1c04cee8c5362b705f1519cf0cd701ef65f6b
+- `azapi` resources: Skip external requests when no resource changes are detected.
 
 BUG FIXES:
 - Fix a bug that query parameters and headers don't work properly with unknown values
 - Fix more edge cases that the provider produced inconsistent result after apply when default output feature is enabled.
+- Fix a bug that when moving resource from `azurerm` resource, the id could not be parsed correctly.
+- Fix a bug that custom retry configuration doesn't override the default retry configuration.
 
 
 ## v2.2.0

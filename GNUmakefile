@@ -17,7 +17,7 @@ tools:
 	go install github.com/katbyte/terrafmt@latest
 	go install golang.org/x/tools/cmd/goimports@latest
 	go install mvdan.cc/gofumpt@latest
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH || $$GOPATH)/bin v1.55.1
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH || $$GOPATH)/bin v1.61.0
 
 build: fmtcheck generate
 	go install
@@ -118,5 +118,8 @@ teamcity-test:
 	@$(MAKE) -C .teamcity tools
 	@$(MAKE) -C .teamcity test
 
+example-test:
+	TF_ACC=1 ARM_TEST_EXAMPLES=${TARGET} go test -v ./internal/services/... -run TestAccExamples_Selected -timeout $(TESTTIMEOUT) -ldflags="-X=github.com/Azure/terraform-provider-azapi/version.ProviderVersion=acc"
 
-.PHONY: docs build build-docker test test-docker testacc vet fmt fmtcheck errcheck scaffold-website tools test-compile website website-test
+
+.PHONY: docs build build-docker test test-docker testacc vet fmt fmtcheck errcheck scaffold-website tools test-compile website website-test example-test
