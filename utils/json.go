@@ -48,12 +48,39 @@ func MergeObject(old interface{}, new interface{}) interface{} {
 		}
 	case []interface{}:
 		if newArr, ok := new.([]interface{}); ok {
-			if len(oldValue) != len(newArr) {
+			if len(oldValue) == 0 || len(newArr) == 0 {
 				return newArr
 			}
+
+			hasIdentifier := identifierOfArrayItem(oldValue[0]) != "" && identifierOfArrayItem(newArr[0]) != ""
+			if !hasIdentifier {
+				if len(oldValue) != len(newArr) {
+					return newArr
+				}
+				res := make([]interface{}, 0)
+				for index := range oldValue {
+					res = append(res, MergeObject(oldValue[index], newArr[index]))
+				}
+				return res
+			}
+
 			res := make([]interface{}, 0)
-			for index := range oldValue {
-				res = append(res, MergeObject(oldValue[index], newArr[index]))
+			used := make([]bool, len(newArr))
+
+			for _, oldItem := range oldValue {
+				found := false
+				for index, newItem := range newArr {
+					if areSameArrayItems(oldItem, newItem) && !used[index] {
+						res = append(res, MergeObject(oldItem, newItem))
+						used[index] = true
+						found = true
+						break
+					}
+				}
+				if found {
+					continue
+				}
+				res = append(res, oldItem)
 			}
 			return res
 		}
@@ -64,6 +91,7 @@ func MergeObject(old interface{}, new interface{}) interface{} {
 type UpdateJsonOption struct {
 	IgnoreCasing          bool
 	IgnoreMissingProperty bool
+	IgnoreNullProperty    bool
 }
 
 // UpdateObject is used to get an updated object which has same schema as old, but with new value
@@ -77,6 +105,8 @@ func UpdateObject(old interface{}, new interface{}, option UpdateJsonOption) int
 			res := make(map[string]interface{})
 			for key, value := range oldValue {
 				switch {
+				case value == nil && option.IgnoreNullProperty:
+					res[key] = nil
 				case newMap[key] != nil:
 					res[key] = UpdateObject(value, newMap[key], option)
 				case option.IgnoreMissingProperty || isZeroValue(value):
@@ -307,6 +337,66 @@ func RemoveFields(input interface{}, fields []string) interface{} {
 		res := make([]interface{}, 0)
 		for _, item := range v {
 			res = append(res, RemoveFields(item, fields))
+		}
+		return res
+	default:
+		return input
+	}
+}
+
+func FilterFields(input interface{}, fieldsToKeep map[string]bool, path string) interface{} {
+	if input == nil {
+		return input
+	}
+	if fieldsToKeep[path] {
+		return input
+	}
+	switch v := input.(type) {
+	case map[string]interface{}:
+		res := make(map[string]interface{})
+		for key, value := range v {
+			out := FilterFields(value, fieldsToKeep, strings.TrimPrefix(path+"."+key, "."))
+			if out != nil {
+				res[key] = out
+			}
+		}
+		if len(res) == 0 {
+			return nil
+		}
+		return res
+	case []interface{}:
+		res := make([]interface{}, 0)
+		for index, item := range v {
+			out := FilterFields(item, fieldsToKeep, fmt.Sprintf("%s[%d]", path, index))
+			if out != nil {
+				res = append(res, out)
+			}
+		}
+		return res
+	default:
+		return nil
+	}
+}
+
+func RemoveNullProperty(input interface{}) interface{} {
+	if input == nil {
+		return input
+	}
+	switch v := input.(type) {
+	case map[string]interface{}:
+		res := make(map[string]interface{})
+		for key, value := range v {
+			if value != nil {
+				res[key] = RemoveNullProperty(value)
+			}
+		}
+		return res
+	case []interface{}:
+		res := make([]interface{}, 0)
+		for _, item := range v {
+			if item != nil {
+				res = append(res, RemoveNullProperty(item))
+			}
 		}
 		return res
 	default:

@@ -7,10 +7,12 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Azure/terraform-provider-azapi/internal/azure/fix"
 	"github.com/Azure/terraform-provider-azapi/internal/clients"
 	"github.com/Azure/terraform-provider-azapi/internal/docstrings"
 	"github.com/Azure/terraform-provider-azapi/internal/locks"
 	"github.com/Azure/terraform-provider-azapi/internal/retry"
+	"github.com/Azure/terraform-provider-azapi/internal/services/common"
 	"github.com/Azure/terraform-provider-azapi/internal/services/defaults"
 	"github.com/Azure/terraform-provider-azapi/internal/services/dynamic"
 	"github.com/Azure/terraform-provider-azapi/internal/services/migration"
@@ -41,6 +43,7 @@ type AzapiUpdateResourceModel struct {
 	Type                  types.String     `tfsdk:"type"`
 	Body                  types.Dynamic    `tfsdk:"body"`
 	SensitiveBody         types.Dynamic    `tfsdk:"sensitive_body"`
+	SensitiveBodyVersion  types.Map        `tfsdk:"sensitive_body_version"`
 	IgnoreCasing          types.Bool       `tfsdk:"ignore_casing"`
 	IgnoreMissingProperty types.Bool       `tfsdk:"ignore_missing_property"`
 	ResponseExportValues  types.Dynamic    `tfsdk:"response_export_values"`
@@ -158,6 +161,12 @@ func (r *AzapiUpdateResource) Schema(ctx context.Context, request resource.Schem
 				Optional:            true,
 				WriteOnly:           true,
 				MarkdownDescription: docstrings.SensitiveBody(),
+			},
+
+			"sensitive_body_version": schema.MapAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				MarkdownDescription: docstrings.SensitiveBodyVersion(),
 			},
 
 			"ignore_casing": schema.BoolAttribute{
@@ -305,7 +314,7 @@ func (r *AzapiUpdateResource) ModifyPlan(ctx context.Context, request resource.M
 		}
 
 		// Set output as unknown to trigger a plan diff, if ephemral body has changed
-		diff, diags := ephemeralBodyChangeInPlan(ctx, request.Private, config.SensitiveBody)
+		diff, diags := ephemeralBodyChangeInPlan(ctx, request.Private, config.SensitiveBody, config.SensitiveBodyVersion, state.SensitiveBodyVersion)
 		if response.Diagnostics = append(response.Diagnostics, diags...); response.Diagnostics.HasError() {
 			return
 		}
@@ -343,8 +352,11 @@ func (r *AzapiUpdateResource) Update(ctx context.Context, request resource.Updat
 
 func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Config, plan tfsdk.Plan, state *tfsdk.State, diagnostics *diag.Diagnostics, privateData PrivateData) {
 	var config, model AzapiUpdateResourceModel
+	var stateModel *AzapiUpdateResourceModel
 	diagnostics.Append(requestConfig.Get(ctx, &config)...)
-	if diagnostics.Append(plan.Get(ctx, &model)...); diagnostics.HasError() {
+	diagnostics.Append(plan.Get(ctx, &model)...)
+	diagnostics.Append(state.Get(ctx, &stateModel)...)
+	if diagnostics.HasError() {
 		return
 	}
 
@@ -388,10 +400,13 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 
 	ctx = tflog.SetField(ctx, "resource_id", id.ID())
 
-	// Ensure the context deadline has been set before calling ConfigureClientWithCustomRetry().
-	client := r.ProviderData.ResourceClient.ConfigureClientWithCustomRetry(ctx, model.Retry, false)
-
-	existing, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(model.ReadHeaders), AsMapOfLists(model.ReadQueryParameters)))
+	client := r.ProviderData.ResourceClient
+	readRequestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.ReadHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+	existing, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, readRequestOptions)
 	if err != nil {
 		diagnostics.AddError("Failed to retrieve resource", fmt.Errorf("checking for presence of existing %s: %+v", id, err).Error())
 		return
@@ -413,33 +428,44 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 		requestBody = existing
 	}
 
-	SensitiveBody := make(map[string]interface{})
-	if err := unmarshalBody(config.SensitiveBody, &SensitiveBody); err != nil {
+	sensitiveBodyVersionInState := types.MapNull(types.StringType)
+	if stateModel != nil {
+		sensitiveBodyVersionInState = stateModel.SensitiveBodyVersion
+	}
+	sensitiveBody, err := unmarshalSensitiveBody(config.SensitiveBody, model.SensitiveBodyVersion, sensitiveBodyVersionInState)
+	if err != nil {
 		diagnostics.AddError("Invalid sensitive_body", fmt.Sprintf(`The argument "sensitive_body" is invalid: %s`, err.Error()))
 		return
 	}
-	if SensitiveBody != nil {
-		requestBody = utils.MergeObject(requestBody, SensitiveBody)
+	if sensitiveBody != nil {
+		requestBody = utils.MergeObject(requestBody, sensitiveBody)
 	}
 
 	if id.ResourceDef != nil {
 		requestBody = (*id.ResourceDef).GetWriteOnly(utils.NormalizeObject(requestBody))
 	}
+	requestBody = fix.GetWriteOnlyFix(requestBody)
 
-	lockIds := AsStringList(model.Locks)
+	lockIds := common.AsStringList(model.Locks)
 	slices.Sort(lockIds)
 	for _, lockId := range lockIds {
 		locks.ByID(lockId)
 		defer locks.UnlockByID(lockId)
 	}
 
-	_, err = client.CreateOrUpdate(ctx, id.AzureResourceId, id.ApiVersion, requestBody, clients.NewRequestOptions(AsMapOfString(model.UpdateHeaders), AsMapOfLists(model.UpdateQueryParameters)))
+	updateRequestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.UpdateHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.UpdateQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+
+	_, err = client.CreateOrUpdate(ctx, id.AzureResourceId, id.ApiVersion, requestBody, updateRequestOptions)
 	if err != nil {
 		diagnostics.AddError("Failed to update resource", fmt.Errorf("updating %q: %+v", id, err).Error())
 		return
 	}
 
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(model.ReadHeaders), AsMapOfLists(model.ReadQueryParameters)))
+	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, readRequestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
@@ -468,14 +494,16 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 	model.Output = output
 
 	diagnostics.Append(state.Set(ctx, model)...)
-
-	writeOnlyBytes, err := dynamic.ToJSON(config.SensitiveBody)
-	if err != nil {
-		diagnostics.AddError("Invalid sensitive_body", err.Error())
-		return
+	if model.SensitiveBodyVersion.IsNull() {
+		writeOnlyBytes, err := dynamic.ToJSON(config.SensitiveBody)
+		if err != nil {
+			diagnostics.AddError("Invalid sensitive_body", err.Error())
+			return
+		}
+		diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, writeOnlyBytes)...)
+	} else {
+		diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, nil)...)
 	}
-	diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, writeOnlyBytes)...)
-
 }
 
 func (r *AzapiUpdateResource) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
@@ -501,10 +529,13 @@ func (r *AzapiUpdateResource) Read(ctx context.Context, request resource.ReadReq
 
 	ctx = tflog.SetField(ctx, "resource_id", id.ID())
 
-	// Ensure the context deadline has been set before calling ConfigureClientWithCustomRetry().
-	client := r.ProviderData.ResourceClient.ConfigureClientWithCustomRetry(ctx, model.Retry, false)
-
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(model.ReadHeaders), AsMapOfLists(model.ReadQueryParameters)))
+	client := r.ProviderData.ResourceClient
+	requestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.ReadHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, requestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("[INFO] Error reading %q - removing from state", id.ID()))

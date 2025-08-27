@@ -424,24 +424,31 @@ func Test_UpdateObject(t *testing.T) {
 }
 
 func Test_MergeObject(t *testing.T) {
-	oldJson := `
- {
+	testcases := []struct {
+		Name       string
+		OldJson    string
+		NewJson    string
+		ExpectJson string
+	}{
+		{
+			Name: "Merge simple objects",
+			OldJson: ` 
+{
 	"a":1,
     "b": {
 		"b1": "b1",
 		"b2": []
 	}
 }
-`
-
-	newJson := `
+`,
+			NewJson: `
 {
 	"b": {
 		"b3": "b3"
 	}
 }
-`
-	expectedJson := `
+`,
+			ExpectJson: `
 {
 	"a":1,
     "b": {
@@ -449,18 +456,66 @@ func Test_MergeObject(t *testing.T) {
 		"b2": [],
 		"b3": "b3"
 	}
+}`,
+		},
+		{
+			Name: "Merge objects with arrays",
+			OldJson: `
+{
+  "array": [
+    {
+      "name": "item1",
+      "key1": "value1"
+    },
+    {
+      "name": "item2",
+      "key2": "value2"
+    }
+  ]
+}`,
+			NewJson: `
+{
+  "array": [
+    {
+      "name": "item2",
+      "key2": "value3"
+    },
+    {
+      "name": "item1",
+      "key1": "value2"
+    }
+  ]
+}`,
+			ExpectJson: `
+{
+  "array": [
+    {
+      "name": "item1",
+      "key1": "value2"
+    },
+    {
+      "name": "item2",
+      "key2": "value3"
+    }
+  ]
 }
-`
-	var new, old, expected interface{}
-	_ = json.Unmarshal([]byte(oldJson), &old)
-	_ = json.Unmarshal([]byte(newJson), &new)
-	_ = json.Unmarshal([]byte(expectedJson), &expected)
+`,
+		},
+	}
 
-	result := utils.MergeObject(old, new)
-	if !reflect.DeepEqual(result, expected) {
-		expectedJson, _ := json.Marshal(expected)
-		resultJson, _ := json.Marshal(result)
-		t.Fatalf("Expected %s but got %s", expectedJson, resultJson)
+	for _, testcase := range testcases {
+		t.Logf("Running test case: %s", testcase.Name)
+		var new, old, expected interface{}
+		_ = json.Unmarshal([]byte(testcase.OldJson), &old)
+		_ = json.Unmarshal([]byte(testcase.NewJson), &new)
+		_ = json.Unmarshal([]byte(testcase.ExpectJson), &expected)
+
+		result := utils.MergeObject(old, new)
+		if !reflect.DeepEqual(result, expected) {
+			expectedJson, _ := json.Marshal(expected)
+			resultJson, _ := json.Marshal(result)
+			t.Fatalf("Test %s: Expected %s but got %s", testcase.Name, expectedJson, resultJson)
+		}
 	}
 }
 
@@ -1094,6 +1149,67 @@ func Test_RemoveFields(t *testing.T) {
 		_ = json.Unmarshal([]byte(testcase.ExpectJson), &expected)
 
 		result := utils.RemoveFields(old, testcase.Fields)
+		if !reflect.DeepEqual(result, expected) {
+			expectedJson, _ := json.Marshal(expected)
+			resultJson, _ := json.Marshal(result)
+			t.Fatalf("Expected %s but got %s", expectedJson, resultJson)
+		}
+	}
+}
+
+func Test_FilterFields(t *testing.T) {
+	testcases := []struct {
+		OldJson    string
+		Fields     []string
+		ExpectJson string
+	}{
+		{
+			OldJson: `
+{
+	"map": {
+		"key1": "value1",
+		"key2": "value2"
+	},
+	"list": [
+		{
+			"name": "item1",
+			"value": "value1"
+		},
+		{
+			"name": "item2",
+			"value": "value2"
+		}
+	],
+	"key1": "value1",
+	"key2": "value2"
+}`,
+			Fields: []string{"map.key1", "list[1].name", "key1"},
+			ExpectJson: `
+{
+	"map": {
+		"key1": "value1"
+	},
+	"list": [
+		{
+			"name": "item2"
+		}
+	],
+	"key1": "value1"
+}`,
+		},
+	}
+
+	for _, testcase := range testcases {
+		var old, expected interface{}
+		_ = json.Unmarshal([]byte(testcase.OldJson), &old)
+		_ = json.Unmarshal([]byte(testcase.ExpectJson), &expected)
+
+		fieldsToKeep := make(map[string]bool)
+		for _, field := range testcase.Fields {
+			fieldsToKeep[field] = true
+		}
+
+		result := utils.FilterFields(old, fieldsToKeep, "")
 		if !reflect.DeepEqual(result, expected) {
 			expectedJson, _ := json.Marshal(expected)
 			resultJson, _ := json.Marshal(result)

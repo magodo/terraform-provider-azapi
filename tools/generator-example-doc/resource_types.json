@@ -236,6 +236,10 @@
     "friendlyName": "Container App Environment"
   },
   {
+    "resourceType": "Microsoft.App/managedEnvironments/privateEndpointConnections",
+    "friendlyName": "Container App Environment Private Endpoin"
+  },
+  {
     "resourceType": "Microsoft.App/managedEnvironments/certificates",
     "friendlyName": "Container App Environment Certificate"
   },
@@ -664,6 +668,10 @@
     "friendlyName": "Cognitive Services Accounts Responsible AI Policies"
   },
   {
+    "resourceType": "Microsoft.CognitiveServices/accounts/raiBlocklists",
+    "friendlyName": "Cognitive Services Accounts Responsible AI Blocklists"
+  },
+  {
     "resourceType": "Microsoft.Communication/communicationServices",
     "friendlyName": "Communication Service"
   },
@@ -806,6 +814,10 @@
   {
     "resourceType": "Microsoft.ContainerRegistry/registries/connectedRegistries",
     "friendlyName": "Container Connected Registry"
+  },
+  {
+    "resourceType": "Microsoft.ContainerRegistry/registries/credentialSets",
+    "friendlyName": "Container Registry Credential Set"
   },
   {
     "resourceType": "Microsoft.ContainerRegistry/registries/scopeMaps",
@@ -2644,6 +2656,10 @@
     "friendlyName": "Search Service"
   },
   {
+    "resourceType": "Microsoft.Search/searchServices/dataSources",
+    "friendlyName": "Search Service Data Source"
+  },
+  {
     "resourceType": "Microsoft.Search/searchServices/sharedPrivateLinkResources",
     "friendlyName": "Shared Private Link Service for an Azure Search Service"
   },
@@ -2948,6 +2964,18 @@
     "friendlyName": "Elastic Job Credential"
   },
   {
+    "resourceType": "Microsoft.Sql/servers/jobAgents/jobs",
+    "friendlyName": "Elastic Job"
+  },
+  {
+    "resourceType": "Microsoft.Sql/servers/jobAgents/jobs/steps",
+    "friendlyName": "Elastic Job Step"
+  },
+  {
+    "resourceType": "Microsoft.Sql/servers/jobAgents/targetGroups",
+    "friendlyName": "Elastic Job Target Group"
+  },
+  {
     "resourceType": "Microsoft.Sql/servers/outboundFirewallRules",
     "friendlyName": "Azure SQL Outbound Firewall Rule"
   },
@@ -2978,6 +3006,14 @@
   {
     "resourceType": "Microsoft.SqlVirtualMachine/sqlVirtualMachines",
     "friendlyName": "Microsoft SQL Virtual Machine"
+  },
+  {
+    "resourceType":"Microsoft.StandbyPool/standbyvirtualmachinepools",
+    "friendlyName":"Microsoft Standby pools for Virtual Machine Scale Sets"
+  },
+  {
+    "resourceType":"Microsoft.StandbyPool/standbyContainerGroupPools",
+    "friendlyName":"Microsoft Standby pools for Container Groups"
   },
   {
     "resourceType": "Microsoft.Storage/storageAccounts",

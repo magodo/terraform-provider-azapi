@@ -1,5 +1,9 @@
 [
   {
+    "resourceProviderNamespace": "Microsoft.AADIAM",
+    "friendlyName": "Microsoft Entra ID"
+  },
+  {
     "resourceProviderNamespace": "Microsoft.AAD",
     "friendlyName": "Microsoft Entra Domain Services",
     "documentLink": "../../active-directory-domain-services/"
@@ -192,6 +196,11 @@
     "resourceProviderNamespace": "Microsoft.CognitiveServices",
     "friendlyName": "Cognitive Services",
     "documentLink": "/en-us/azure/ai-services/"
+  },
+  {
+    "resourceProviderNamespace": "Microsoft.CodeSigning",
+    "friendlyName": "Trusted Signing",
+    "documentLink": "/en-us/azure/trusted-signing/"
   },
   {
     "resourceProviderNamespace": "Microsoft.Commerce",
@@ -641,6 +650,10 @@
     ]
   },
   {
+    "resourceProviderNamespace": "Microsoft.NetworkFunction",
+    "friendlyName": "Azure Network Function Manager"
+  },
+  {
     "resourceProviderNamespace": "Microsoft.Notebooks",
     "friendlyName": "Azure Notebooks",
     "documentLink": "https://notebooks.azure.com/help/introduction"
@@ -750,6 +763,10 @@
     "documentLink": "../"
   },
   {
+    "resourceProviderNamespace": "Microsoft.ResourceConnector",
+    "friendlyName": "Azure Arc Resource Bridge"
+  },
+  {
     "resourceProviderNamespace": "Microsoft.SaaS",
     "friendlyName": "core",
     "documentLink": null
@@ -794,6 +811,10 @@
     "friendlyName": "Service Linker"
   },
   {
+    "resourceProviderNamespace": "Microsoft.ServiceNetworking",
+    "friendlyName": "Azure Service Networking"
+  },
+  {
     "resourceProviderNamespace": "Microsoft.Services",
     "friendlyName": "core",
     "documentLink": null
@@ -826,6 +847,11 @@
     "resourceProviderNamespace": "Microsoft.SqlVirtualMachine",
     "friendlyName": "SQL Server on Azure Virtual Machines",
     "documentLink": "/en-us/azure/azure-sql/virtual-machines/windows/sql-server-on-azure-vm-iaas-what-is-overview"
+  },
+  {
+    "resourceProviderNamespace":"Microsoft.StandbyPool",
+    "friendlyName":"Standby Pools",
+    "documentLink":"/en-us/azure/virtual-machine-scale-sets/standby-pools-overview"
   },
   {
     "resourceProviderNamespace": "Microsoft.StorSimple",

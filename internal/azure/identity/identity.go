@@ -3,8 +3,10 @@ package identity
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/Azure/terraform-provider-azapi/internal/services/common"
 	"github.com/Azure/terraform-provider-azapi/internal/services/parse"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -95,7 +97,17 @@ func FlattenIdentity(identity interface{}) *Model {
 			}
 		}
 
-		identityType := identityMap["type"].(string)
+		// should not be nil, but check just in case
+		if identityMap["type"] == nil {
+			return nil
+		}
+
+		identityType, ok := identityMap["type"].(string)
+		if !ok {
+			// should not happen, but check just in case
+			return nil
+		}
+
 		switch {
 		case strings.Contains(identityType, ","):
 			identityType = string(SystemAssignedUserAssigned)
@@ -142,6 +154,37 @@ func FromList(input types.List) Model {
 		tflog.Warn(context.Background(), fmt.Sprintf("failed to convert list to identity: %s", diags))
 	}
 	return identityModel
+}
+
+func IdentityIDsSemanticallyEqual(a, b types.List) bool {
+	if a.IsUnknown() || b.IsUnknown() {
+		return false
+	}
+	for _, element := range a.Elements() {
+		if element.IsUnknown() {
+			return false
+		}
+	}
+	for _, element := range b.Elements() {
+		if element.IsUnknown() {
+			return false
+		}
+	}
+
+	aList := common.AsStringList(a)
+	bList := common.AsStringList(b)
+	slices.Sort(aList)
+	slices.Sort(bList)
+
+	if len(aList) != len(bList) {
+		return false
+	}
+	for i := range aList {
+		if !strings.EqualFold(aList[i], bList[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func ToList(input Model) types.List {

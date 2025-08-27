@@ -16,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 func schemaValidate(config *AzapiResourceModel) error {
@@ -230,33 +229,6 @@ func flattenOutputJMES(responseBody interface{}, paths map[string]string) attr.V
 	return out
 }
 
-func AsStringList(input types.List) []string {
-	var result []string
-	diags := input.ElementsAs(context.Background(), &result, false)
-	if diags.HasError() {
-		tflog.Warn(context.Background(), fmt.Sprintf("failed to convert list to string list: %s", diags))
-	}
-	return result
-}
-
-func AsMapOfString(input types.Map) map[string]string {
-	result := make(map[string]string)
-	diags := input.ElementsAs(context.Background(), &result, false)
-	if diags.HasError() {
-		tflog.Warn(context.Background(), fmt.Sprintf("failed to convert input to map of strings: %s", diags))
-	}
-	return result
-}
-
-func AsMapOfLists(input types.Map) map[string][]string {
-	result := make(map[string][]string)
-	diags := input.ElementsAs(context.Background(), &result, false)
-	if diags.HasError() {
-		tflog.Warn(context.Background(), fmt.Sprintf("failed to convert input to map of lists: %s", diags))
-	}
-	return result
-}
-
 func unmarshalBody(input types.Dynamic, out interface{}) error {
 	if input.IsNull() || input.IsUnknown() || input.IsUnderlyingValueUnknown() {
 		return nil
@@ -271,15 +243,47 @@ func unmarshalBody(input types.Dynamic, out interface{}) error {
 	return nil
 }
 
+func unmarshalSensitiveBody(input types.Dynamic, bodyVersionConfig types.Map, bodyVersionState types.Map) (interface{}, error) {
+	out := make(map[string]interface{})
+	err := unmarshalBody(input, &out)
+
+	if bodyVersionConfig.IsNull() {
+		return out, err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("unmarshaling sensitive body failed: %s", err.Error())
+	}
+
+	paths := make(map[string]bool)
+	for key, value := range bodyVersionConfig.Elements() {
+		shouldAdd := true
+		if !bodyVersionState.IsNull() {
+			if stateValue, ok := bodyVersionState.Elements()[key]; ok && stateValue.Equal(value) {
+				// If the value in the state is equal to the value in the config, we don't need to add it.
+				shouldAdd = false
+			}
+		}
+		if shouldAdd {
+			paths[key] = true
+		}
+	}
+	res := utils.FilterFields(out, paths, "")
+	return res, nil
+}
+
 // ephemeralBodyChangeInPlan checks if the sensitive_body has changed in the plan modify phase.
-func ephemeralBodyChangeInPlan(ctx context.Context, d PrivateData, ephemeralBody types.Dynamic) (ok bool, diags diag.Diagnostics) {
-	tflog.Warn(ctx, fmt.Sprintf("sensitive_bodyChangeInPlan: sensitive_body: %s", ephemeralBody.String()))
+func ephemeralBodyChangeInPlan(ctx context.Context, d PrivateData, ephemeralBody types.Dynamic, bodyVersionConfig types.Map, bodyVersionState types.Map) (ok bool, diags diag.Diagnostics) {
 	// 1. sensitive_body is unknown (e.g. referencing an knonw-after-apply value)
 	if !dynamic.IsFullyKnown(ephemeralBody) {
 		return true, nil
 	}
 
-	// 2. sensitive_body is known in the config, but has different hash than the private data
+	// 2. Use sensitive_body_version to check if the sensitive_body needs to be updated.
+	if !bodyVersionConfig.IsNull() {
+		return !bodyVersionConfig.Equal(bodyVersionState), nil
+	}
+
+	// 3. sensitive_body is known in the config, but has different hash than the private data
 	eb, err := dynamic.ToJSON(ephemeralBody)
 	if err != nil {
 		diags.AddError(

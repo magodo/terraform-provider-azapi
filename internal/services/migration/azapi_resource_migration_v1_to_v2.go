@@ -149,10 +149,12 @@ func AzapiResourceMigrationV1ToV2(ctx context.Context) resource.StateUpgrader {
 				Identity                      types.List          `tfsdk:"identity"`
 				Body                          types.Dynamic       `tfsdk:"body"`
 				SensitiveBody                 types.Dynamic       `tfsdk:"sensitive_body"`
+				SensitiveBodyVersion          types.Map           `tfsdk:"sensitive_body_version"`
 				Locks                         types.List          `tfsdk:"locks"`
 				SchemaValidationEnabled       types.Bool          `tfsdk:"schema_validation_enabled"`
 				IgnoreCasing                  types.Bool          `tfsdk:"ignore_casing"`
 				IgnoreMissingProperty         types.Bool          `tfsdk:"ignore_missing_property"`
+				IgnoreNullProperty            types.Bool          `tfsdk:"ignore_null_property"`
 				ReplaceTriggersExternalValues types.Dynamic       `tfsdk:"replace_triggers_external_values"`
 				ReplaceTriggersRefs           types.List          `tfsdk:"replace_triggers_refs"`
 				ResponseExportValues          types.Dynamic       `tfsdk:"response_export_values"`
@@ -204,6 +206,7 @@ func AzapiResourceMigrationV1ToV2(ctx context.Context) resource.StateUpgrader {
 				SchemaValidationEnabled:       oldState.SchemaValidationEnabled,
 				IgnoreCasing:                  oldState.IgnoreCasing,
 				IgnoreMissingProperty:         oldState.IgnoreMissingProperty,
+				IgnoreNullProperty:            types.BoolValue(false),
 				ReplaceTriggersExternalValues: types.DynamicNull(),
 				ReplaceTriggersRefs:           types.ListNull(types.StringType),
 				ResponseExportValues:          responseExportValues,
@@ -211,6 +214,7 @@ func AzapiResourceMigrationV1ToV2(ctx context.Context) resource.StateUpgrader {
 				Output:                        outputVal,
 				Tags:                          oldState.Tags,
 				Timeouts:                      oldState.Timeouts,
+				SensitiveBodyVersion:          types.MapNull(types.StringType),
 			}
 
 			response.Diagnostics.Append(response.State.Set(ctx, newState)...)

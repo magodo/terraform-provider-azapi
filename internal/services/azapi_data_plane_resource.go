@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/docstrings"
 	"github.com/Azure/terraform-provider-azapi/internal/locks"
 	"github.com/Azure/terraform-provider-azapi/internal/retry"
+	"github.com/Azure/terraform-provider-azapi/internal/services/common"
 	"github.com/Azure/terraform-provider-azapi/internal/services/defaults"
 	"github.com/Azure/terraform-provider-azapi/internal/services/dynamic"
 	"github.com/Azure/terraform-provider-azapi/internal/services/migration"
@@ -313,7 +314,7 @@ func (r *DataPlaneResource) ModifyPlan(ctx context.Context, request resource.Mod
 	// Check if any paths in replace_triggers_refs have changed
 	if state != nil && plan != nil && !plan.ReplaceTriggersRefs.IsNull() {
 		refPaths := make(map[string]string)
-		for pathIndex, refPath := range AsStringList(plan.ReplaceTriggersRefs) {
+		for pathIndex, refPath := range common.AsStringList(plan.ReplaceTriggersRefs) {
 			refPaths[fmt.Sprintf("%d", pathIndex)] = refPath
 		}
 
@@ -406,13 +407,12 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Ensure the context deadline has been set before calling ConfigureClientWithCustomRetry().
-	client := r.ProviderData.DataPlaneClient.ConfigureClientWithCustomRetry(ctx, model.Retry, false)
+	client := r.ProviderData.DataPlaneClient
 
 	if isNewResource {
 		// check if the resource already exists using the non-retry client to avoid issue where user specifies
 		// a FooResourceNotFound error as a retryable error
-		_, err = r.ProviderData.DataPlaneClient.Get(ctx, id, clients.NewRequestOptions(AsMapOfString(model.ReadHeaders), AsMapOfLists(model.ReadQueryParameters)))
+		_, err = r.ProviderData.DataPlaneClient.Get(ctx, id, clients.NewRequestOptions(common.AsMapOfString(model.ReadHeaders), common.AsMapOfLists(model.ReadQueryParameters)))
 		if err == nil {
 			diagnostics.AddError("Resource already exists", tf.ImportAsExistsError("azapi_data_plane_resource", id.ID()).Error())
 			return
@@ -428,24 +428,35 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 		diagnostics.AddError("Invalid body", fmt.Sprintf(`The argument "body" is invalid: %s`, err.Error()))
 		return
 	}
-	lockIds := AsStringList(model.Locks)
+	lockIds := common.AsStringList(model.Locks)
 	slices.Sort(lockIds)
 	for _, lockId := range lockIds {
 		locks.ByID(lockId)
 		defer locks.UnlockByID(lockId)
 	}
 
-	_, err = client.CreateOrUpdateThenPoll(ctx, id, body, clients.NewRequestOptions(AsMapOfString(model.CreateHeaders), AsMapOfLists(model.CreateQueryParameters)))
+	requestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.CreateHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.CreateQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+	_, err = client.CreateOrUpdateThenPoll(ctx, id, body, requestOptions)
 	if err != nil {
 		diagnostics.AddError("Failed to create/update resource", fmt.Errorf("creating/updating %q: %+v", id, err).Error())
 		return
 	}
 
-	// Create a new retry client to handle specific case of transient 403/404 after resource creation
-	// If a read after create retry is not specified, use the default.
-	clientGetAfterPut := r.ProviderData.DataPlaneClient.ConfigureClientWithCustomRetry(ctx, model.Retry, true)
-
-	responseBody, err := clientGetAfterPut.Get(ctx, id, clients.NewRequestOptions(AsMapOfString(model.ReadHeaders), AsMapOfLists(model.ReadQueryParameters)))
+	requestOptions = clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.ReadHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
+		RetryOptions: clients.CombineRetryOptions(
+			// Create a new retry option to handle specific case of transient 403/404 after resource creation
+			// If a read after create retry is not specified, use the default.
+			clients.NewRetryOptionsForReadAfterCreate(),
+			clients.NewRetryOptions(model.Retry),
+		),
+	}
+	responseBody, err := client.Get(ctx, id, requestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
@@ -490,10 +501,13 @@ func (r *DataPlaneResource) Read(ctx context.Context, request resource.ReadReque
 	}
 	ctx = tflog.SetField(ctx, "resource_id", id.ID())
 
-	// Ensure that the context deadline has been set before calling ConfigureClientWithCustomRetry().
-	client := r.ProviderData.DataPlaneClient.ConfigureClientWithCustomRetry(ctx, model.Retry, false)
-
-	responseBody, err := client.Get(ctx, id, clients.NewRequestOptions(AsMapOfString(model.ReadHeaders), AsMapOfLists(model.ReadQueryParameters)))
+	client := r.ProviderData.DataPlaneClient
+	requestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.ReadHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+	responseBody, err := client.Get(ctx, id, requestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("[INFO] Error reading %q - removing from state", id.ID()))
@@ -572,17 +586,21 @@ func (r *DataPlaneResource) Delete(ctx context.Context, request resource.DeleteR
 
 	ctx = tflog.SetField(ctx, "resource_id", id.ID())
 
-	// Ensure the context deadline has been set before calling ConfigureClientWithCustomRetry().
-	client := r.ProviderData.DataPlaneClient.ConfigureClientWithCustomRetry(ctx, model.Retry, false)
+	client := r.ProviderData.DataPlaneClient
 
-	lockIds := AsStringList(model.Locks)
+	lockIds := common.AsStringList(model.Locks)
 	slices.Sort(lockIds)
 	for _, lockId := range lockIds {
 		locks.ByID(lockId)
 		defer locks.UnlockByID(lockId)
 	}
 
-	_, err = client.DeleteThenPoll(ctx, id, clients.NewRequestOptions(AsMapOfString(model.DeleteHeaders), AsMapOfLists(model.DeleteQueryParameters)))
+	requestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.DeleteHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.DeleteQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+	_, err = client.DeleteThenPoll(ctx, id, requestOptions)
 	if err != nil && !utils.ResponseErrorWasNotFound(err) {
 		response.Diagnostics.AddError("Failed to delete resource", fmt.Errorf("deleting %s: %+v", id, err).Error())
 	}

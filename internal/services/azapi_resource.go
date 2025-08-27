@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/docstrings"
 	"github.com/Azure/terraform-provider-azapi/internal/locks"
 	"github.com/Azure/terraform-provider-azapi/internal/retry"
+	"github.com/Azure/terraform-provider-azapi/internal/services/common"
 	"github.com/Azure/terraform-provider-azapi/internal/services/defaults"
 	"github.com/Azure/terraform-provider-azapi/internal/services/dynamic"
 	"github.com/Azure/terraform-provider-azapi/internal/services/migration"
@@ -52,10 +53,12 @@ const FlagMoveState = "move_state"
 type AzapiResourceModel struct {
 	Body                          types.Dynamic    `tfsdk:"body"`
 	SensitiveBody                 types.Dynamic    `tfsdk:"sensitive_body"`
+	SensitiveBodyVersion          types.Map        `tfsdk:"sensitive_body_version"`
 	ID                            types.String     `tfsdk:"id"`
 	Identity                      types.List       `tfsdk:"identity"`
 	IgnoreCasing                  types.Bool       `tfsdk:"ignore_casing"`
 	IgnoreMissingProperty         types.Bool       `tfsdk:"ignore_missing_property"`
+	IgnoreNullProperty            types.Bool       `tfsdk:"ignore_null_property"`
 	Location                      types.String     `tfsdk:"location"`
 	Locks                         types.List       `tfsdk:"locks"`
 	Name                          types.String     `tfsdk:"name"`
@@ -181,6 +184,12 @@ func (r *AzapiResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 				MarkdownDescription: docstrings.SensitiveBody(),
 			},
 
+			"sensitive_body_version": schema.MapAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				MarkdownDescription: docstrings.SensitiveBodyVersion(),
+			},
+
 			"replace_triggers_external_values": schema.DynamicAttribute{
 				Optional: true,
 				MarkdownDescription: "Will trigger a replace of the resource when the value changes and is not `null`. This can be used by practitioners to force a replace of the resource when certain values change, e.g. changing the SKU of a virtual machine based on the value of variables or locals. " +
@@ -230,6 +239,13 @@ func (r *AzapiResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 				Computed:            true,
 				Default:             defaults.BoolDefault(true),
 				MarkdownDescription: docstrings.IgnoreMissingProperty(),
+			},
+
+			"ignore_null_property": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             defaults.BoolDefault(false),
+				MarkdownDescription: docstrings.IgnoreNullProperty(),
 			},
 
 			"response_export_values": schema.DynamicAttribute{
@@ -351,6 +367,9 @@ func (r *AzapiResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 							Validators: []validator.List{
 								listvalidator.ValueStringsAre(myvalidator.StringIsUserAssignedIdentityID()),
 							},
+							PlanModifiers: []planmodifier.List{
+								myplanmodifier.ListUseStateWhen(identity.IdentityIDsSemanticallyEqual),
+							},
 							MarkdownDescription: docstrings.IdentityIds(),
 						},
 
@@ -435,6 +454,11 @@ func (r *AzapiResource) ModifyPlan(ctx context.Context, request resource.ModifyP
 	}
 
 	defer func() {
+		if plan.Output.IsUnknown() {
+			plan.Body = config.Body
+			plan.Type = config.Type
+		}
+
 		response.Plan.Set(ctx, plan)
 	}()
 
@@ -468,11 +492,47 @@ func (r *AzapiResource) ModifyPlan(ctx context.Context, request resource.ModifyP
 	}
 
 	// if the config identity type and identity ids are not changed, use the state identity
-	if !config.Identity.IsNull() && state != nil && !state.Identity.IsNull() {
-		configIdentity := identity.FromList(config.Identity)
+	if !plan.Identity.IsNull() && state != nil && !state.Identity.IsNull() {
+		planIdentity := identity.FromList(plan.Identity)
 		stateIdentity := identity.FromList(state.Identity)
-		if configIdentity.Type.Equal(stateIdentity.Type) && configIdentity.IdentityIDs.Equal(stateIdentity.IdentityIDs) {
+		if planIdentity.Type.Equal(stateIdentity.Type) && planIdentity.IdentityIDs.Equal(stateIdentity.IdentityIDs) {
 			plan.Identity = state.Identity
+		}
+	}
+
+	// In the below two cases, we think the config is still matched with the remote state, and there's no need to update the resource:
+	// 1. If the api-version is changed, but the body is not changed
+	// 2. If the body only removes/adds properties that are equal to the remote state
+	if r.ProviderData.Features.IgnoreNoOpChanges && dynamic.IsFullyKnown(plan.Body) && state != nil && (!dynamic.SemanticallyEqual(plan.Body, state.Body) || !plan.Type.Equal(state.Type)) {
+		// GET the existing resource with config's api-version
+		responseBody, err := r.ProviderData.ResourceClient.Get(ctx, state.ID.ValueString(), apiVersion, clients.DefaultRequestOptions())
+		if err != nil {
+			response.Diagnostics.AddError("Failed to retrieve resource", fmt.Sprintf("Retrieving existing resource %s: %+v", state.ID.ValueString(), err))
+			return
+		}
+		stateBody := make(map[string]interface{})
+		if err := unmarshalBody(state.Body, &stateBody); err != nil {
+			response.Diagnostics.AddError("Invalid state body", fmt.Sprintf(`The argument "body" in state is invalid: %s`, err.Error()))
+			return
+		}
+		// stateBody contains sensitive properties that are not returned in GET response
+		responseBody = utils.MergeObject(responseBody, stateBody)
+
+		configBody := make(map[string]interface{})
+		if err := unmarshalBody(plan.Body, &configBody); err != nil {
+			response.Diagnostics.AddError("Invalid body", fmt.Sprintf(`The argument "body" is invalid: %s`, err.Error()))
+			return
+		}
+		option := utils.UpdateJsonOption{
+			IgnoreCasing:          plan.IgnoreCasing.ValueBool(),
+			IgnoreMissingProperty: false,
+			IgnoreNullProperty:    plan.IgnoreNullProperty.ValueBool(),
+		}
+		remoteBody := utils.UpdateObject(configBody, responseBody, option)
+		// suppress the change if the remote body is equal to the config body
+		if reflect.DeepEqual(remoteBody, configBody) {
+			plan.Body = state.Body
+			plan.Type = state.Type
 		}
 	}
 
@@ -491,14 +551,16 @@ func (r *AzapiResource) ModifyPlan(ctx context.Context, request resource.ModifyP
 		}
 	}
 
-	// Set output as unknown to trigger a plan diff, if ephemral body has changed
-	diff, diags := ephemeralBodyChangeInPlan(ctx, request.Private, config.SensitiveBody)
-	if response.Diagnostics = append(response.Diagnostics, diags...); response.Diagnostics.HasError() {
-		return
-	}
-	if diff {
-		tflog.Info(ctx, `"sensitive_body" has changed`)
-		plan.Output = types.DynamicUnknown()
+	if state != nil {
+		// Set output as unknown to trigger a plan diff, if ephemral body has changed
+		diff, diags := ephemeralBodyChangeInPlan(ctx, request.Private, config.SensitiveBody, config.SensitiveBodyVersion, state.SensitiveBodyVersion)
+		if response.Diagnostics = append(response.Diagnostics, diags...); response.Diagnostics.HasError() {
+			return
+		}
+		if diff {
+			tflog.Info(ctx, `"sensitive_body" has changed`)
+			plan.Output = types.DynamicUnknown()
+		}
 	}
 
 	if dynamic.IsFullyKnown(plan.Body) {
@@ -517,7 +579,7 @@ func (r *AzapiResource) ModifyPlan(ctx context.Context, request resource.ModifyP
 		// Check if any paths in replace_triggers_refs have changed
 		if state != nil && plan != nil && !plan.ReplaceTriggersRefs.IsNull() {
 			refPaths := make(map[string]string)
-			for pathIndex, refPath := range AsStringList(plan.ReplaceTriggersRefs) {
+			for pathIndex, refPath := range common.AsStringList(plan.ReplaceTriggersRefs) {
 				refPaths[fmt.Sprintf("%d", pathIndex)] = refPath
 			}
 
@@ -637,13 +699,16 @@ func (r *AzapiResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Co
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Ensure the context deadline has been set before calling ConfigureClientWithCustomRetry().
-	client := r.ProviderData.ResourceClient.ConfigureClientWithCustomRetry(ctx, plan.Retry, false)
+	client := r.ProviderData.ResourceClient
 
 	if isNewResource {
 		// check if the resource already exists using the non-retry client to avoid issue where user specifies
 		// a FooResourceNotFound error as a retryable error
-		_, err = r.ProviderData.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(plan.ReadHeaders), AsMapOfLists(plan.ReadQueryParameters)))
+		requestOptions := clients.RequestOptions{
+			Headers:         common.AsMapOfString(plan.ReadHeaders),
+			QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(plan.ReadQueryParameters)),
+		}
+		_, err = client.Get(ctx, id.AzureResourceId, id.ApiVersion, requestOptions)
 		if err == nil {
 			diagnostics.AddError("Resource already exists", tf.ImportAsExistsError("azapi_resource", id.ID()).Error())
 			return
@@ -665,12 +730,16 @@ func (r *AzapiResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Co
 	if diagnostics.Append(expandBody(body, *plan)...); diagnostics.HasError() {
 		return
 	}
-	SensitiveBody := make(map[string]interface{})
-	if err := unmarshalBody(config.SensitiveBody, &SensitiveBody); err != nil {
+	sensitiveBodyVersionInState := types.MapNull(types.StringType)
+	if state != nil {
+		sensitiveBodyVersionInState = state.SensitiveBodyVersion
+	}
+	sensitiveBody, err := unmarshalSensitiveBody(config.SensitiveBody, plan.SensitiveBodyVersion, sensitiveBodyVersionInState)
+	if err != nil {
 		diagnostics.AddError("Invalid sensitive_body", fmt.Sprintf(`The argument "sensitive_body" is invalid: %s`, err.Error()))
 		return
 	}
-	body = utils.MergeObject(body, SensitiveBody).(map[string]interface{})
+	body = utils.MergeObject(body, sensitiveBody).(map[string]interface{})
 
 	if !isNewResource {
 		// handle the case that identity block was once set, now it's removed
@@ -681,25 +750,43 @@ func (r *AzapiResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Co
 		}
 	}
 
+	if plan.IgnoreNullProperty.ValueBool() {
+		out := utils.RemoveNullProperty(body)
+		v, ok := out.(map[string]interface{})
+		if ok {
+			body = v
+		}
+	}
+
 	// create/update the resource
-	lockIds := AsStringList(plan.Locks)
+	lockIds := common.AsStringList(plan.Locks)
 	slices.Sort(lockIds)
 	for _, lockId := range lockIds {
 		locks.ByID(lockId)
 		defer locks.UnlockByID(lockId)
 	}
 
-	options := clients.NewRequestOptions(AsMapOfString(plan.CreateHeaders), AsMapOfLists(plan.CreateQueryParameters))
-	if !isNewResource {
-		options = clients.NewRequestOptions(AsMapOfString(plan.UpdateHeaders), AsMapOfLists(plan.UpdateQueryParameters))
+	requestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(plan.CreateHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(plan.CreateQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(plan.Retry),
 	}
-	_, err = client.CreateOrUpdate(ctx, id.AzureResourceId, id.ApiVersion, body, options)
+	if !isNewResource {
+		requestOptions.Headers = common.AsMapOfString(plan.UpdateHeaders)
+		requestOptions.QueryParameters = clients.NewQueryParameters(common.AsMapOfLists(plan.UpdateQueryParameters))
+	}
+	_, err = client.CreateOrUpdate(ctx, id.AzureResourceId, id.ApiVersion, body, requestOptions)
 	if err != nil {
 		tflog.Debug(ctx, "azapi_resource.CreateUpdate client call create/update resource failed", map[string]interface{}{
 			"err": err,
 		})
 		if isNewResource {
-			if responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(plan.ReadHeaders), AsMapOfLists(plan.ReadQueryParameters))); err == nil {
+			requestOptions := clients.RequestOptions{
+				Headers:         common.AsMapOfString(plan.ReadHeaders),
+				QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(plan.ReadQueryParameters)),
+				RetryOptions:    clients.NewRetryOptions(plan.Retry),
+			}
+			if responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, requestOptions); err == nil {
 				// generate the computed fields
 				plan.ID = types.StringValue(id.ID())
 
@@ -735,10 +822,16 @@ func (r *AzapiResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Co
 		return
 	}
 
-	clientGetAfterPut := r.ProviderData.ResourceClient.ConfigureClientWithCustomRetry(ctx, plan.Retry, true)
-
 	tflog.Debug(ctx, "azapi_resource.CreateUpdate get resource after creation")
-	responseBody, err := clientGetAfterPut.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(plan.ReadHeaders), AsMapOfLists(plan.ReadQueryParameters)))
+	requestOptions = clients.RequestOptions{
+		Headers:         common.AsMapOfString(plan.ReadHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(plan.ReadQueryParameters)),
+		RetryOptions: clients.CombineRetryOptions(
+			clients.NewRetryOptionsForReadAfterCreate(),
+			clients.NewRetryOptions(plan.Retry),
+		),
+	}
+	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, requestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
@@ -779,12 +872,16 @@ func (r *AzapiResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Co
 	}
 	diagnostics.Append(responseState.Set(ctx, plan)...)
 
-	writeOnlyBytes, err := dynamic.ToJSON(config.SensitiveBody)
-	if err != nil {
-		diagnostics.AddError("Invalid sensitive_body", err.Error())
-		return
+	if plan.SensitiveBodyVersion.IsNull() {
+		writeOnlyBytes, err := dynamic.ToJSON(config.SensitiveBody)
+		if err != nil {
+			diagnostics.AddError("Invalid sensitive_body", err.Error())
+			return
+		}
+		diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, writeOnlyBytes)...)
+	} else {
+		diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, nil)...)
 	}
-	diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, writeOnlyBytes)...)
 }
 
 func (r *AzapiResource) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
@@ -811,9 +908,15 @@ func (r *AzapiResource) Read(ctx context.Context, request resource.ReadRequest, 
 
 	ctx = tflog.SetField(ctx, "resource_id", id.ID())
 
-	client := r.ProviderData.ResourceClient.ConfigureClientWithCustomRetry(ctx, model.Retry, false)
+	client := r.ProviderData.ResourceClient
 
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(model.ReadHeaders), AsMapOfLists(model.ReadQueryParameters)))
+	requestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.ReadHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+
+	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, requestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
@@ -828,6 +931,9 @@ func (r *AzapiResource) Read(ctx context.Context, request resource.ReadRequest, 
 	state.Name = types.StringValue(id.Name)
 	state.ParentID = types.StringValue(id.ParentId)
 	state.Type = types.StringValue(fmt.Sprintf("%s@%s", id.AzureResourceType, id.ApiVersion))
+	if state.IgnoreNullProperty.IsNull() {
+		state.IgnoreNullProperty = types.BoolValue(false)
+	}
 
 	requestBody := make(map[string]interface{})
 	if err := unmarshalBody(model.Body, &requestBody); err != nil {
@@ -881,6 +987,7 @@ func (r *AzapiResource) Read(ctx context.Context, request resource.ReadRequest, 
 	option := utils.UpdateJsonOption{
 		IgnoreCasing:          model.IgnoreCasing.ValueBool(),
 		IgnoreMissingProperty: model.IgnoreMissingProperty.ValueBool(),
+		IgnoreNullProperty:    model.IgnoreNullProperty.ValueBool(),
 	}
 	body := utils.UpdateObject(requestBody, responseBody, option)
 
@@ -951,16 +1058,21 @@ func (r *AzapiResource) Delete(ctx context.Context, request resource.DeleteReque
 	ctx, cancel := context.WithTimeout(ctx, deleteTimeout)
 	defer cancel()
 
-	client := r.ProviderData.ResourceClient.ConfigureClientWithCustomRetry(ctx, model.Retry, false)
+	client := r.ProviderData.ResourceClient
 
-	lockIds := AsStringList(model.Locks)
+	lockIds := common.AsStringList(model.Locks)
 	slices.Sort(lockIds)
 	for _, lockId := range lockIds {
 		locks.ByID(lockId)
 		defer locks.UnlockByID(lockId)
 	}
 
-	_, err = client.Delete(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(model.DeleteHeaders), AsMapOfLists(model.DeleteQueryParameters)))
+	requestOptions := clients.RequestOptions{
+		Headers:         common.AsMapOfString(model.DeleteHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.DeleteQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(model.Retry),
+	}
+	_, err = client.Delete(ctx, id.AzureResourceId, id.ApiVersion, requestOptions)
 	if err != nil && !utils.ResponseErrorWasNotFound(err) {
 		response.Diagnostics.AddError("Failed to delete resource", fmt.Errorf("deleting %s: %+v", id, err).Error())
 	}
@@ -983,7 +1095,7 @@ func (r *AzapiResource) ImportState(ctx context.Context, request resource.Import
 	state.ParentID = types.StringValue(id.ParentId)
 	state.Type = types.StringValue(fmt.Sprintf("%s@%s", id.AzureResourceType, id.ApiVersion))
 
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(AsMapOfString(state.ReadHeaders), AsMapOfLists(state.ReadQueryParameters)))
+	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.NewRequestOptions(common.AsMapOfString(state.ReadHeaders), common.AsMapOfLists(state.ReadQueryParameters)))
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("[INFO] Error reading %q - removing from state", id.ID()))
@@ -1204,9 +1316,11 @@ func (r *AzapiResource) defaultAzapiResourceModel() AzapiResourceModel {
 		Type:                          types.StringNull(),
 		Location:                      types.StringNull(),
 		Body:                          types.Dynamic{},
+		SensitiveBodyVersion:          types.MapNull(types.StringType),
 		Identity:                      types.ListNull(identity.Model{}.ModelType()),
 		IgnoreCasing:                  types.BoolValue(false),
 		IgnoreMissingProperty:         types.BoolValue(true),
+		IgnoreNullProperty:            types.BoolValue(false),
 		Locks:                         types.ListNull(types.StringType),
 		Output:                        types.DynamicNull(),
 		ReplaceTriggersExternalValues: types.DynamicNull(),

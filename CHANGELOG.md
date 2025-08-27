@@ -1,4 +1,33 @@
-## v2.4.0 (unreleased)
+## v2.6.0
+
+DEPRECATIONS:
+- `retry` block: The `multiplier` and `randomization_factor` are deprecated and will be removed in the next major release. Please remove them from the `retry` block. The provider will use the default values for these fields.
+
+ENHANCEMENTS:
+- Use `aztfauth` for the shared authentication logic.
+- Update bicep types to https://github.com/ms-henglu/bicep-types-az/commit/a3cf29cb316d792abe0a607f97469a577382ee77
+
+BUG FIXES:
+- Fix a bug that invalid resource ID containing `|` character is not detected when validating the configuration.
+- Fix a bug that schema validation fails to validate when the discriminator field is unknown.
+- Fix the crash that occurs when the `identity.type` returns a value that is not a string.
+
+## v2.5.0
+
+ENHANCEMENTS:
+- `azapi_resource` resource: ignore the changes when the `body` field matches the remote state even if the `body` field or `api-version` field is changed.
+- `azapi_resource` resource: ignore the order of the `identity_ids` array.
+- `azapi_resource` resource: support `ignore_null_property` field, which is used to ignore the null properties in the `body` field.
+- `azapi_resource` resource: support `sensitive_body_version` field, which is used to manually control the version of the sensitive body.
+- `azapi_update_resource` resource: remove the readonly fields from `identity.userAssignedIdentities` in the request body.
+- Update bicep types to https://github.com/ms-henglu/bicep-types-az/commit/a50156f9eb062a517a48bfb86067afc0a8f4c4dc
+
+BUG FIXES:
+- Fix a bug that schema validation fails to validate unknown string values when both `body` and `sensitive_body` are specified.
+- Fix a bug that `azapi_update_resource` does not update the correct items in an array when the order of the items is different from the remote state.
+- Update the list of readonly fields which should be excluded from the default output.
+
+## v2.4.0
 
 FEATURES:
 - **New Provider Function**: unique_string
