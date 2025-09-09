@@ -247,10 +247,11 @@ func (opt Option) buildClientCertificateCredOpt() (entrauth.CredentialOption, er
 		return nil, err
 	}
 	return entrauth.ClientCertificateCredentialOption{
-		TenantId: *tenantId,
-		ClientId: *clientId,
-		CertData: certs,
-		CertKey:  key,
+		TenantId:             *tenantId,
+		ClientId:             *clientId,
+		CertData:             certs,
+		CertKey:              key,
+		SendCertificateChain: opt.SendCertificateChain,
 
 		ClientOptions:              opt.ClientOptions,
 		AdditionallyAllowedTenants: opt.AdditionallyAllowedTenants,
@@ -264,10 +265,13 @@ func (opt Option) buildMSICredOpt() (entrauth.CredentialOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	return entrauth.ManagedIdentityCredentialOption{
-		ID:            azidentity.ClientID(*clientId),
+	out := entrauth.ManagedIdentityCredentialOption{
 		ClientOptions: opt.ClientOptions,
-	}, nil
+	}
+	if *clientId != "" {
+		out.ID = azidentity.ClientID(*clientId)
+	}
+	return out, nil
 }
 
 func (opt Option) buildAzureCLICredOpt() (entrauth.CredentialOption, error) {
