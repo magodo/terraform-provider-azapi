@@ -38,6 +38,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -82,6 +83,52 @@ type AzapiResourceModel struct {
 	ReadQueryParameters           types.Map        `tfsdk:"read_query_parameters" skip_on:"update"`
 }
 
+// AzapiResourceIdentityModel represents the identity data for importing a resource
+type AzapiResourceIdentityModel struct {
+	ID   types.String `tfsdk:"id"`
+	Type types.String `tfsdk:"type"`
+}
+
+func NewDefaultAzapiResourceModel() AzapiResourceModel {
+	return AzapiResourceModel{
+		ID:                            types.StringNull(),
+		Name:                          types.StringNull(),
+		ParentID:                      types.StringNull(),
+		Type:                          types.StringNull(),
+		Location:                      types.StringNull(),
+		Body:                          types.Dynamic{},
+		SensitiveBodyVersion:          types.MapNull(types.StringType),
+		Identity:                      types.ListNull(identity.Model{}.ModelType()),
+		IgnoreCasing:                  types.BoolValue(false),
+		IgnoreMissingProperty:         types.BoolValue(true),
+		IgnoreNullProperty:            types.BoolValue(false),
+		Locks:                         types.ListNull(types.StringType),
+		Output:                        types.DynamicNull(),
+		ReplaceTriggersExternalValues: types.DynamicNull(),
+		ReplaceTriggersRefs:           types.ListNull(types.StringType),
+		ResponseExportValues:          types.DynamicNull(),
+		Retry:                         retry.RetryValue{},
+		SchemaValidationEnabled:       types.BoolValue(true),
+		Tags:                          types.MapNull(types.StringType),
+		Timeouts: timeouts.Value{
+			Object: types.ObjectNull(map[string]attr.Type{
+				"create": types.StringType,
+				"update": types.StringType,
+				"read":   types.StringType,
+				"delete": types.StringType,
+			}),
+		},
+		CreateHeaders:         types.MapNull(types.StringType),
+		CreateQueryParameters: types.MapNull(types.ListType{ElemType: types.StringType}),
+		UpdateHeaders:         types.MapNull(types.StringType),
+		UpdateQueryParameters: types.MapNull(types.ListType{ElemType: types.StringType}),
+		DeleteHeaders:         types.MapNull(types.StringType),
+		DeleteQueryParameters: types.MapNull(types.ListType{ElemType: types.StringType}),
+		ReadHeaders:           types.MapNull(types.StringType),
+		ReadQueryParameters:   types.MapNull(types.ListType{ElemType: types.StringType}),
+	}
+}
+
 var _ resource.Resource = &AzapiResource{}
 var _ resource.ResourceWithConfigure = &AzapiResource{}
 var _ resource.ResourceWithModifyPlan = &AzapiResource{}
@@ -89,6 +136,7 @@ var _ resource.ResourceWithValidateConfig = &AzapiResource{}
 var _ resource.ResourceWithImportState = &AzapiResource{}
 var _ resource.ResourceWithUpgradeState = &AzapiResource{}
 var _ resource.ResourceWithMoveState = &AzapiResource{}
+var _ resource.ResourceWithIdentity = &AzapiResource{}
 
 type AzapiResource struct {
 	ProviderData *clients.Client
@@ -398,6 +446,22 @@ func (r *AzapiResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 	}
 }
 
+func (r *AzapiResource) IdentitySchema(ctx context.Context, request resource.IdentitySchemaRequest, response *resource.IdentitySchemaResponse) {
+	response.IdentitySchema = identityschema.Schema{
+		Attributes: map[string]identityschema.Attribute{
+			"id": identityschema.StringAttribute{
+				RequiredForImport: true,
+				Description:       "The Azure resource ID",
+			},
+			"type": identityschema.StringAttribute{
+				OptionalForImport: true,
+				Description:       "The Azure resource type",
+			},
+		},
+		Version: 0,
+	}
+}
+
 func (r *AzapiResource) ValidateConfig(ctx context.Context, request resource.ValidateConfigRequest, response *resource.ValidateConfigResponse) {
 	var config *AzapiResourceModel
 	if response.Diagnostics.Append(request.Config.Get(ctx, &config)...); response.Diagnostics.HasError() {
@@ -643,6 +707,11 @@ func (r *AzapiResource) ModifyPlan(ctx context.Context, request resource.ModifyP
 
 func (r *AzapiResource) Create(ctx context.Context, request resource.CreateRequest, response *resource.CreateResponse) {
 	r.CreateUpdate(ctx, request.Config, request.Plan, &response.State, &response.Diagnostics, response.Private)
+
+	var model *AzapiResourceModel
+	if response.Diagnostics.Append(response.State.Get(ctx, &model)...); !response.Diagnostics.HasError() && model != nil && !model.ID.IsNull() {
+		response.Diagnostics.Append(response.Identity.SetAttribute(ctx, path.Root("id"), model.ID)...)
+	}
 }
 
 func (r *AzapiResource) Update(ctx context.Context, request resource.UpdateRequest, response *resource.UpdateResponse) {
@@ -739,7 +808,9 @@ func (r *AzapiResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Co
 		diagnostics.AddError("Invalid sensitive_body", fmt.Sprintf(`The argument "sensitive_body" is invalid: %s`, err.Error()))
 		return
 	}
-	body = utils.MergeObject(body, sensitiveBody).(map[string]interface{})
+	if sensitiveBody != nil {
+		body = utils.MergeObject(body, sensitiveBody).(map[string]interface{})
+	}
 
 	if !isNewResource {
 		// handle the case that identity block was once set, now it's removed
@@ -1032,6 +1103,7 @@ func (r *AzapiResource) Read(ctx context.Context, request resource.ReadRequest, 
 	}
 
 	response.Diagnostics.Append(response.State.Set(ctx, state)...)
+	response.Diagnostics.Append(response.Identity.SetAttribute(ctx, path.Root("id"), state.ID)...)
 }
 
 func (r *AzapiResource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {
@@ -1079,17 +1151,51 @@ func (r *AzapiResource) Delete(ctx context.Context, request resource.DeleteReque
 }
 
 func (r *AzapiResource) ImportState(ctx context.Context, request resource.ImportStateRequest, response *resource.ImportStateResponse) {
-	tflog.Debug(ctx, fmt.Sprintf("Importing Resource - parsing %q", request.ID))
+	var id parse.ResourceId
+	var err error
 
-	id, err := parse.ResourceID(request.ID)
-	if err != nil {
-		response.Diagnostics.AddError("Invalid Resource ID", fmt.Errorf("parsing Resource ID %q: %+v", request.ID, err).Error())
-		return
+	// Case 1: Traditional ID-based import using request.ID
+	if request.Identity == nil || request.Identity.Raw.IsNull() {
+		tflog.Debug(ctx, fmt.Sprintf("Importing Resource - parsing %q", request.ID))
+		id, err = parse.ResourceID(request.ID)
+		if err != nil {
+			response.Diagnostics.AddError("Invalid Resource ID", fmt.Errorf("parsing Resource ID %q: %+v", request.ID, err).Error())
+			return
+		}
+	} else {
+		// Identity-based import (from list resource protocol)
+		// Extract identity data using the model
+		var identityData AzapiResourceIdentityModel
+		diags := request.Identity.Get(ctx, &identityData)
+		response.Diagnostics.Append(diags...)
+		if response.Diagnostics.HasError() {
+			return
+		}
+
+		resourceID := identityData.ID.ValueString()
+
+		// Case 2: Both id and type are set - extract API version from type
+		if identityData.Type.ValueString() != "" {
+			tflog.Debug(ctx, fmt.Sprintf("Importing Resource from identity with type - parsing %q with type %q", resourceID, identityData.Type.ValueString()))
+			id, err = parse.ResourceIDWithResourceType(resourceID, identityData.Type.ValueString())
+			if err != nil {
+				response.Diagnostics.AddError("Invalid Resource ID", fmt.Errorf("parsing Resource ID %q with type %q: %+v", resourceID, identityData.Type.ValueString(), err).Error())
+				return
+			}
+		} else {
+			// Case 3: Only id is set - parse it to extract API version
+			tflog.Debug(ctx, fmt.Sprintf("Importing Resource from identity - parsing %q", resourceID))
+			id, err = parse.ResourceID(resourceID)
+			if err != nil {
+				response.Diagnostics.AddError("Invalid Resource ID", fmt.Errorf("parsing Resource ID %q: %+v", resourceID, err).Error())
+				return
+			}
+		}
 	}
 
 	client := r.ProviderData.ResourceClient
 
-	state := r.defaultAzapiResourceModel()
+	state := NewDefaultAzapiResourceModel()
 	state.ID = types.StringValue(id.ID())
 	state.Name = types.StringValue(id.Name)
 	state.ParentID = types.StringValue(id.ParentId)
@@ -1139,6 +1245,12 @@ func (r *AzapiResource) ImportState(ctx context.Context, request resource.Import
 	state.Output = output
 
 	response.Diagnostics.Append(response.State.Set(ctx, state)...)
+
+	resourceIdentity := AzapiResourceIdentityModel{
+		ID:   types.StringValue(id.ID()),
+		Type: state.Type,
+	}
+	response.Diagnostics.Append(response.Identity.Set(ctx, resourceIdentity)...)
 }
 
 func (r *AzapiResource) MoveState(ctx context.Context) []resource.StateMover {
@@ -1149,6 +1261,10 @@ func (r *AzapiResource) MoveState(ctx context.Context) []resource.StateMover {
 					"id": schema.StringAttribute{
 						Computed: true,
 					},
+					// attempt to read the available attributes from the azurerm resource
+					"resource_manager_id":     schema.StringAttribute{Computed: true},
+					"resource_id":             schema.StringAttribute{Computed: true},
+					"resource_versionless_id": schema.StringAttribute{Computed: true},
 				},
 			},
 			StateMover: func(ctx context.Context, request resource.MoveStateRequest, response *resource.MoveStateResponse) {
@@ -1171,9 +1287,9 @@ func (r *AzapiResource) MoveState(ctx context.Context) []resource.StateMover {
 					return
 				}
 
-				azureId, err := parse.AzurermIdToAzureId(request.SourceTypeName, requestID)
-				if err != nil {
-					response.Diagnostics.AddError("Invalid Resource ID", fmt.Errorf("parsing Resource ID %q: %+v", requestID, err).Error())
+				azureId, diagErr := deriveAzureArmIdFromAzurermState(ctx, request.SourceTypeName, requestID, request.SourceState)
+				if diagErr != nil {
+					response.Diagnostics.AddError("Invalid Resource ID", fmt.Sprintf("parsing Resource ID %q: %s", requestID, diagErr))
 					return
 				}
 
@@ -1183,7 +1299,7 @@ func (r *AzapiResource) MoveState(ctx context.Context) []resource.StateMover {
 					return
 				}
 
-				state := r.defaultAzapiResourceModel()
+				state := NewDefaultAzapiResourceModel()
 				state.ID = types.StringValue(id.ID())
 				state.Name = types.StringValue(id.Name)
 				state.ParentID = types.StringValue(id.ParentId)
@@ -1250,6 +1366,66 @@ func (r *AzapiResource) tagsWithDefaultTags(config types.Map, state *AzapiResour
 	return types.MapNull(types.StringType)
 }
 
+// deriveAzureArmIdFromAzurermState attempts to convert an azurerm resource's primary ID (which may be a data-plane endpoint)
+// into the corresponding ARM ID. Some azurerm resources expose management-plane IDs using alternative attribute names.
+// Supported cases:
+//   - azurerm_storage_container: uses `resource_manager_id`
+//   - azurerm_storage_share: uses `resource_manager_id`
+//   - azurerm_key_vault_secret: uses `resource_versionless_id`
+//   - azurerm_key_vault_key: uses `resource_versionless_id`
+//
+// For all other resources, fallback to generic AzurermIdToAzureId conversion.
+func deriveAzureArmIdFromAzurermState(ctx context.Context, azurermType, primaryId string, sourceState *tfsdk.State) (string, error) {
+	lowerId := strings.ToLower(primaryId)
+	isHTTPS := strings.HasPrefix(lowerId, "https://")
+
+	switch azurermType {
+	case "azurerm_storage_container":
+		if isHTTPS {
+			if sourceState != nil {
+				var armId string
+				if err := sourceState.GetAttribute(ctx, path.Root("resource_manager_id"), &armId); err == nil && armId != "" {
+					return armId, nil
+				}
+			}
+			return "", fmt.Errorf("unable to derive ARM resource ID for storage container: missing attribute 'resource_manager_id' in source state")
+		}
+	case "azurerm_storage_share":
+		if isHTTPS {
+			if sourceState != nil {
+				var armId string
+				if err := sourceState.GetAttribute(ctx, path.Root("resource_manager_id"), &armId); err == nil && armId != "" {
+					// Convert /fileshares/ to /shares/ in the resource ID
+					return parse.AzurermIdToAzureId(azurermType, armId)
+				}
+			}
+			return "", fmt.Errorf("unable to derive ARM resource ID for storage share: missing attribute 'resource_manager_id' in source state")
+		}
+	case "azurerm_key_vault_secret":
+		if isHTTPS {
+			if sourceState != nil {
+				var armId string
+				if err := sourceState.GetAttribute(ctx, path.Root("resource_versionless_id"), &armId); err == nil && armId != "" {
+					return armId, nil
+				}
+			}
+			return "", fmt.Errorf("unable to derive ARM resource ID for key vault secret: missing attribute 'resource_versionless_id' in source state")
+		}
+	case "azurerm_key_vault_key":
+		if isHTTPS {
+			if sourceState != nil {
+				var armId string
+				if err := sourceState.GetAttribute(ctx, path.Root("resource_versionless_id"), &armId); err == nil && armId != "" {
+					return armId, nil
+				}
+			}
+			return "", fmt.Errorf("unable to derive ARM resource ID for key vault key: missing attribute 'resource_versionless_id' in source state")
+		}
+	}
+
+	return parse.AzurermIdToAzureId(azurermType, primaryId)
+}
+
 func (r *AzapiResource) locationWithDefaultLocation(configLocation types.String, planLocation types.String, state *AzapiResourceModel, body types.Dynamic, resourceDef *aztypes.ResourceType) types.String {
 	// location field has a field level plan modifier which suppresses the diff if the location is not actually changed
 	config := planLocation
@@ -1306,46 +1482,6 @@ func (r *AzapiResource) locationWithDefaultLocation(configLocation types.String,
 
 	// 6. return null if all the above cases are null
 	return types.StringNull()
-}
-
-func (r *AzapiResource) defaultAzapiResourceModel() AzapiResourceModel {
-	return AzapiResourceModel{
-		ID:                            types.StringNull(),
-		Name:                          types.StringNull(),
-		ParentID:                      types.StringNull(),
-		Type:                          types.StringNull(),
-		Location:                      types.StringNull(),
-		Body:                          types.Dynamic{},
-		SensitiveBodyVersion:          types.MapNull(types.StringType),
-		Identity:                      types.ListNull(identity.Model{}.ModelType()),
-		IgnoreCasing:                  types.BoolValue(false),
-		IgnoreMissingProperty:         types.BoolValue(true),
-		IgnoreNullProperty:            types.BoolValue(false),
-		Locks:                         types.ListNull(types.StringType),
-		Output:                        types.DynamicNull(),
-		ReplaceTriggersExternalValues: types.DynamicNull(),
-		ReplaceTriggersRefs:           types.ListNull(types.StringType),
-		ResponseExportValues:          types.DynamicNull(),
-		Retry:                         retry.RetryValue{},
-		SchemaValidationEnabled:       types.BoolValue(true),
-		Tags:                          types.MapNull(types.StringType),
-		Timeouts: timeouts.Value{
-			Object: types.ObjectNull(map[string]attr.Type{
-				"create": types.StringType,
-				"update": types.StringType,
-				"read":   types.StringType,
-				"delete": types.StringType,
-			}),
-		},
-		CreateHeaders:         types.MapNull(types.StringType),
-		CreateQueryParameters: types.MapNull(types.ListType{ElemType: types.StringType}),
-		UpdateHeaders:         types.MapNull(types.StringType),
-		UpdateQueryParameters: types.MapNull(types.ListType{ElemType: types.StringType}),
-		DeleteHeaders:         types.MapNull(types.StringType),
-		DeleteQueryParameters: types.MapNull(types.ListType{ElemType: types.StringType}),
-		ReadHeaders:           types.MapNull(types.StringType),
-		ReadQueryParameters:   types.MapNull(types.ListType{ElemType: types.StringType}),
-	}
 }
 
 func expandBody(body map[string]interface{}, model AzapiResourceModel) diag.Diagnostics {

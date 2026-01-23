@@ -1,11 +1,11 @@
 pool:
-  name: pool-ubuntu-2004
+  name: pool-ubuntu-2404
 
 steps:
   - task: GoTool@0
     displayName: "Install correct version of Go"
     inputs:
-      version: '1.24.2'
+      version: '1.24.6'
       GOPATH: "$(Pipeline.Workspace)/gopath"
       GOBIN: "$(GOPATH)/bin"
   

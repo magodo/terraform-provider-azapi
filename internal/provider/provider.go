@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -22,10 +23,12 @@ import (
 	"github.com/Azure/terraform-provider-azapi/version"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/function"
+	"github.com/hashicorp/terraform-plugin-framework/list"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -37,6 +40,8 @@ import (
 var _ provider.Provider = &Provider{}
 var _ provider.ProviderWithFunctions = &Provider{}
 var _ provider.ProviderWithEphemeralResources = &Provider{}
+var _ provider.ProviderWithListResources = &Provider{}
+var _ provider.ProviderWithActions = &Provider{}
 
 func AzureProvider() provider.Provider {
 	return &Provider{}
@@ -71,6 +76,7 @@ type providerData struct {
 	PartnerID                    types.String `tfsdk:"partner_id"`
 	CustomCorrelationRequestID   types.String `tfsdk:"custom_correlation_request_id"`
 	DisableCorrelationRequestID  types.Bool   `tfsdk:"disable_correlation_request_id"`
+	DisableInstanceDiscovery     types.Bool   `tfsdk:"disable_instance_discovery"`
 	DisableTerraformPartnerID    types.Bool   `tfsdk:"disable_terraform_partner_id"`
 	DefaultName                  types.String `tfsdk:"default_name"`
 	DefaultLocation              types.String `tfsdk:"default_location"`
@@ -150,9 +156,9 @@ func (p Provider) Schema(ctx context.Context, request provider.SchemaRequest, re
 			"environment": schema.StringAttribute{
 				Optional: true,
 				Validators: []validator.String{
-					stringvalidator.OneOfCaseInsensitive("public", "usgovernment", "china"),
+					stringvalidator.OneOfCaseInsensitive("public", "usgovernment", "china", "custom"),
 				},
-				MarkdownDescription: "The Cloud Environment which should be used. Possible values are `public`, `usgovernment` and `china`. Defaults to `public`. This can also be sourced from the `ARM_ENVIRONMENT` Environment Variable.",
+				MarkdownDescription: "The Cloud Environment which should be used. Possible values are `public`, `usgovernment`, `china` and `custom`. Defaults to `public`. This can also be sourced from the `ARM_ENVIRONMENT` Environment Variable.",
 			},
 
 			// TODO@mgd: the metadata_host is used to retrieve metadata from Azure to identify current environment, this is used to eliminate Azure Stack usage, in which case the provider doesn't support.
@@ -270,6 +276,11 @@ func (p Provider) Schema(ctx context.Context, request provider.SchemaRequest, re
 				MarkdownDescription: "This will disable the x-ms-correlation-request-id header.",
 			},
 
+			"disable_instance_discovery": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "Disables Instance Discovery, which validates that the Authority is valid and known by the Microsoft Entra instance metadata service at `https://login.microsoft.com` before authenticating. This should only be enabled when the configured authority is known to be valid and trustworthy - such as when running against Azure Stack or when `environment` is set to `custom`. This can also be specified via the `ARM_DISABLE_INSTANCE_DISCOVERY` environment variable. Defaults to `false`.",
+			},
+
 			"disable_terraform_partner_id": schema.BoolAttribute{
 				Optional:            true,
 				MarkdownDescription: "Disable sending the Terraform Partner ID if a custom `partner_id` isn't specified, which allows Microsoft to better understand the usage of Terraform. The Partner ID does not give HashiCorp any direct access to usage information. This can also be sourced from the `ARM_DISABLE_TERRAFORM_PARTNER_ID` environment variable. Defaults to `false`.",
@@ -311,7 +322,7 @@ func (p Provider) Schema(ctx context.Context, request provider.SchemaRequest, re
 
 			"maximum_busy_retry_attempts": schema.Int32Attribute{
 				Optional:            true,
-				MarkdownDescription: "The maximum number of retries to attempt if the Azure API returns an HTTP 408, 429, 500, 502, 503, or 504 response. The default is `3`. The resource-specific retry configuration may additionally be used to retry on other errors and conditions.",
+				MarkdownDescription: "DEPRECATED - The maximum number of retries to attempt if the Azure API returns an HTTP 408, 429, 500, 502, 503, or 504 response. The default is `32767`, this allows the provider to rely on the resource timeout values rather than a maximum retry count. The resource-specific retry configuration may additionally be used to retry on other errors and conditions. This property will be removed in a future version.",
 			},
 
 			"custom_headers": schema.MapAttribute{
@@ -370,10 +381,13 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		}
 	}
 
+	activeDirectoryAuthorityHost := ""
+	resourceManagerEndpoint := ""
+	resourceManagerAudience := ""
 	if model.Endpoint.IsNull() {
-		activeDirectoryAuthorityHost := os.Getenv("ARM_ACTIVE_DIRECTORY_AUTHORITY_HOST")
-		resourceManagerEndpoint := os.Getenv("ARM_RESOURCE_MANAGER_ENDPOINT")
-		resourceManagerAudience := os.Getenv("ARM_RESOURCE_MANAGER_AUDIENCE")
+		activeDirectoryAuthorityHost = os.Getenv("ARM_ACTIVE_DIRECTORY_AUTHORITY_HOST")
+		resourceManagerEndpoint = os.Getenv("ARM_RESOURCE_MANAGER_ENDPOINT")
+		resourceManagerAudience = os.Getenv("ARM_RESOURCE_MANAGER_AUDIENCE")
 		attrTypes := make(map[string]attr.Type)
 		attrTypes["active_directory_authority_host"] = types.StringType
 		attrTypes["resource_manager_endpoint"] = types.StringType
@@ -531,6 +545,18 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		}
 	}
 
+	if model.DisableInstanceDiscovery.IsNull() {
+		// NOTE: Whilst the Azure CLI uses `AZURE_CORE_INSTANCE_DISCOVERY=false` - because we're exposing the property
+		// using the same name as the Azure SDK (DisableInstanceDiscovery) - this would be misleading as we'd need to
+		// invert the value (or use a differing property name, like 'EnableInstanceDiscovery') - as such the
+		// `ARM_DISABLE_INSTANCE_DISCOVERY` environment variable is specific to this provider at this time.
+		if v := os.Getenv("ARM_DISABLE_INSTANCE_DISCOVERY"); v != "" {
+			model.DisableInstanceDiscovery = types.BoolValue(strings.EqualFold(v, "true"))
+		} else {
+			model.DisableInstanceDiscovery = types.BoolValue(false)
+		}
+	}
+
 	if model.DisableTerraformPartnerID.IsNull() {
 		if v := os.Getenv("ARM_DISABLE_TERRAFORM_PARTNER_ID"); v != "" {
 			model.DisableTerraformPartnerID = types.BoolValue(v == "true")
@@ -572,6 +598,31 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		cloudConfig = cloud.AzureGovernment
 	case "china":
 		cloudConfig = cloud.AzureChina
+	case "custom":
+		{
+			if activeDirectoryAuthorityHost == "" {
+				response.Diagnostics.AddError("Missing value for `active_directory_authority_host`.", "When `environment` is set to `custom` a value must be provided for `active_directory_authority_host`. This can also be set via the Environment Variable `ARM_ACTIVE_DIRECTORY_AUTHORITY_HOST`.")
+			}
+			if resourceManagerEndpoint == "" {
+				response.Diagnostics.AddError("Missing value for `resource_manager_endpoint`.", "When `environment` is set to `custom` a value must be provided for `resource_manager_endpoint`. This can also be set via the Environment Variable `ARM_RESOURCE_MANAGER_ENDPOINT`.")
+			}
+			if resourceManagerAudience == "" {
+				response.Diagnostics.AddError("Missing value for `resource_manager_audience`.", "When `environment` is set to `custom` a value must be provided for `resource_manager_audience`. This can also be set via the Environment Variable `ARM_RESOURCE_MANAGER_AUDIENCE`.")
+			}
+			if response.Diagnostics.HasError() {
+				return
+			}
+
+			cloudConfig = cloud.Configuration{
+				ActiveDirectoryAuthorityHost: activeDirectoryAuthorityHost,
+				Services: map[cloud.ServiceName]cloud.ServiceConfiguration{
+					cloud.ResourceManager: {
+						Audience: resourceManagerAudience,
+						Endpoint: resourceManagerEndpoint,
+					},
+				},
+			}
+		}
 	default:
 		response.Diagnostics.AddError("Invalid `environment` value.", fmt.Sprintf("The `environment` value '%s' is invalid. Valid values are 'public', 'usgovernment' and 'china'.", env))
 		return
@@ -604,7 +655,9 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		}
 	}
 
-	cred, err := buildChainedTokenCredential(model, azcore.ClientOptions{Cloud: cloudConfig})
+	cred, err := buildChainedTokenCredential(model, azcore.ClientOptions{
+		Cloud: cloudConfig,
+	})
 	if err != nil {
 		response.Diagnostics.AddError("Failed to obtain a credential.", err.Error())
 		return
@@ -615,7 +668,10 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		customHeaders[k] = []string{v.(basetypes.StringValue).ValueString()}
 	}
 
-	maxGoSdkRetryAttempts := int32(3)
+	// Set to high number to rely on the resource timeout value (context deadline).
+	// TODO: Next major version the `MaximumBusyRetryAttempts` property will be removed
+	// and the value should be fixed at math.MaxInt16.
+	maxGoSdkRetryAttempts := int32(math.MaxInt16)
 	if !model.MaximumBusyRetryAttempts.IsNull() {
 		maxGoSdkRetryAttempts = model.MaximumBusyRetryAttempts.ValueInt32()
 	}
@@ -653,6 +709,8 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 	response.ResourceData = client
 	response.DataSourceData = client
 	response.EphemeralResourceData = client
+	response.ListResourceData = client
+	response.ActionData = client
 }
 
 func (p Provider) Functions(ctx context.Context) []func() function.Function {
@@ -671,6 +729,7 @@ func (p Provider) Functions(ctx context.Context) []func() function.Function {
 		func() function.Function { return &functions.ManagementGroupResourceIdFunction{} },
 		func() function.Function { return &functions.ExtensionResourceIdFunction{} },
 		func() function.Function { return &functions.UniqueStringFunction{} },
+		func() function.Function { return &functions.Snake2CamelFunction{} },
 	}
 }
 
@@ -717,6 +776,20 @@ func (p Provider) EphemeralResources(ctx context.Context) []func() ephemeral.Eph
 		func() ephemeral.EphemeralResource {
 			return &services.ActionEphemeral{}
 		},
+	}
+}
+
+func (p Provider) ListResources(ctx context.Context) []func() list.ListResource {
+	return []func() list.ListResource{
+		func() list.ListResource {
+			return &services.AzapiResourceList{}
+		},
+	}
+}
+
+func (p Provider) Actions(ctx context.Context) []func() action.Action {
+	return []func() action.Action{
+		func() action.Action { return &services.AzapiResourceAction{} },
 	}
 }
 
@@ -783,6 +856,7 @@ func buildChainedTokenCredential(model providerData, clientOpt azcore.ClientOpti
 		UseAzureCLI:                model.UseCLI.ValueBool(),
 		ClientOptions:              clientOpt,
 		AdditionallyAllowedTenants: auxTenants,
+		DisableInstanceDiscovery:   model.DisableInstanceDiscovery.ValueBool(),
 	})
 
 	return cred, err

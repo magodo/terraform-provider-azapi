@@ -237,7 +237,11 @@
   },
   {
     "resourceType": "Microsoft.App/managedEnvironments/privateEndpointConnections",
-    "friendlyName": "Container App Environment Private Endpoin"
+    "friendlyName": "Container App Environment Private Endpoint Connection"
+  },
+  {
+    "resourceType": "Microsoft.App/managedEnvironments/privateEndpoint",
+    "friendlyName": "Container App Environment Private Endpoint"
   },
   {
     "resourceType": "Microsoft.App/managedEnvironments/certificates",
@@ -657,11 +661,19 @@
   },
   {
     "resourceType": "Microsoft.CognitiveServices/accounts",
-    "friendlyName": "AI Services Account"
+    "friendlyName": "Cognitive Services Account"
+  },
+  {
+    "resourceType": "Microsoft.CognitiveServices/accounts/connections",
+    "friendlyName": "Cognitive Services Account Connection"
   },
   {
     "resourceType": "Microsoft.CognitiveServices/accounts/deployments",
     "friendlyName": "Cognitive Services Account Deployment"
+  },
+  {
+    "resourceType": "Microsoft.CognitiveServices/accounts/projects",
+    "friendlyName": "Cognitive Services Account Project"
   },
   {
     "resourceType": "Microsoft.CognitiveServices/accounts/raiPolicies",
@@ -1361,7 +1373,15 @@
   },
   {
     "resourceType": "Microsoft.DocumentDB/mongoClusters",
-    "friendlyName": "MongoDB Cluster using vCore Architecture"
+    "friendlyName": "Azure Cosmos DB for MongoDB (vCore)"
+  },
+  {
+    "resourceType": "Microsoft.DocumentDB/mongoClusters/firewallRules",
+    "friendlyName": "Azure Cosmos DB for MongoDB (vCore) Firewall Rule"
+  },
+  {
+    "resourceType": "Microsoft.DocumentDB/mongoClusters/users",
+    "friendlyName": "Azure Cosmos DB for MongoDB (vCore) User"
   },
   {
     "resourceType": "Microsoft.Elastic/monitors",

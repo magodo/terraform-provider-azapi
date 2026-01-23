@@ -46,6 +46,21 @@ func TestAccGenericResource_basic(t *testing.T) {
 	})
 }
 
+func TestAccGenericResource_resourceGroup(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azapi_resource", "resourceGroup")
+	r := GenericResource{}
+
+	data.ResourceTest(t, r, []resource.TestStep{
+		{
+			// Template contains only a Resource Group
+			Config: r.template(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+	})
+}
+
 func TestAccGenericResource_invalidVersionUpdate(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azapi_resource", "test")
 	r := GenericResource{}
@@ -102,6 +117,33 @@ func TestAccGenericResource_importWithApiVersion(t *testing.T) {
 			ImportStateVerify:       true,
 			ImportStateIdFunc:       r.ImportIdFunc,
 			ImportStateVerifyIgnore: defaultIgnores(),
+		},
+	})
+}
+
+func TestAccGenericResource_importWithIdentity(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azapi_resource", "test")
+	r := GenericResource{}
+
+	data.ResourceTest(t, r, []resource.TestStep{
+		{
+			Config: r.basic(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		// All import cases in one step: tests all three scenarios
+		// 1a: ID with API version as query parameter
+		// 1b: ID without API version (parsed from resource path)
+		// 2: ID and Type both provided
+		{
+			Config: r.importWithIdentityAllCases(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That("azapi_resource.import_id_with_api_version").ExistsInAzure(r),
+				check.That("azapi_resource.import_id_without_api_version").ExistsInAzure(r),
+				check.That("azapi_resource.import_id_and_type").ExistsInAzure(r),
+			),
 		},
 	})
 }
@@ -633,6 +675,118 @@ func TestAccGenericResource_moveResource(t *testing.T) {
 	})
 }
 
+func TestAccGenericResource_moveStorageContainer(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azapi_resource", "test")
+	r := GenericResource{}
+	data.ResourceTest(t, r, []resource.TestStep{
+		{
+			Config:            r.moveStorageContainerSetup(data),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveStorageContainerStartMoving(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveStorageContainerUpdate(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+	})
+}
+
+func TestAccGenericResource_moveStorageShare(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azapi_resource", "test")
+	r := GenericResource{}
+	data.ResourceTest(t, r, []resource.TestStep{
+		{
+			Config:            r.moveStorageShareSetup(data),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveStorageShareStartMoving(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveStorageShareUpdate(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+	})
+}
+
+func TestAccGenericResource_moveKeyVaultSecret(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azapi_resource", "test")
+	r := GenericResource{}
+	data.ResourceTest(t, r, []resource.TestStep{
+		{
+			Config:            r.moveKeyVaultSecretSetup(data),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveKeyVaultSecretStartMoving(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveKeyVaultSecretUpdate(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveKeyVaultSecretRemoved(data),
+			Check:  resource.ComposeTestCheckFunc(
+			// resource should be removed from state; no existence check
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+	})
+}
+
+func TestAccGenericResource_moveKeyVaultKey(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azapi_resource", "test")
+	r := GenericResource{}
+	data.ResourceTest(t, r, []resource.TestStep{
+		{
+			Config:            r.moveKeyVaultKeySetup(data),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveKeyVaultKeyStartMoving(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config: r.moveKeyVaultKeyUpdate(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+		{
+			Config:            r.moveKeyVaultKeyRemoved(data),
+			Check:             resource.ComposeTestCheckFunc(),
+			ExternalProviders: externalProvidersAzurerm(),
+		},
+	})
+}
+
 func TestAccGenericResource_SensitiveBody(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azapi_resource", "test")
 	r := GenericResource{}
@@ -690,6 +844,23 @@ func TestAccGenericResource_SensitiveBodyVersion(t *testing.T) {
 				check.That(data.ResourceName).Key("output.tags.tag1").HasValue("tag1-value"),
 				check.That(data.ResourceName).Key("output.tags.tag2").HasValue("tag2-value3"),
 				check.That(data.ResourceName).Key("output.tags.tag3").HasValue("tag3-value"),
+			),
+		},
+		data.ImportStepWithImportStateIdFunc(r.ImportIdFunc, ignores...),
+	})
+}
+
+func TestAccGenericResource_sensitiveBodyVersionWithEmptyBody(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azapi_resource", "test")
+	r := GenericResource{}
+
+	ignores := defaultIgnores()
+	ignores = append(ignores, "sensitive_body_version")
+	data.ResourceTest(t, r, []resource.TestStep{
+		{
+			Config: r.sensitiveBodyVersionWithEmptyBody(data),
+			Check: resource.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStepWithImportStateIdFunc(r.ImportIdFunc, ignores...),
@@ -1012,6 +1183,69 @@ resource "azapi_resource" "test" {
   }
 }
 `, r.template(data), data.RandomString, testCertBase64)
+}
+
+func (r GenericResource) importWithIdentityAllCases(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%[1]s
+
+locals {
+  # Create ID with API version as query parameter for Case 1a
+  test_id_with_api_version = format("%%s?api-version=%%s",
+    azapi_resource.test.id,
+    split("@", azapi_resource.test.type)[1]
+  )
+}
+
+# Case 1a: Identity-based import with only ID (ID contains API version as query parameter)
+# This imports the existing test resource using ID with API version in query parameter
+import {
+  to = azapi_resource.import_id_with_api_version
+  identity = {
+    id = local.test_id_with_api_version
+  }
+}
+
+resource "azapi_resource" "import_id_with_api_version" {
+  type      = azapi_resource.test.type
+  name      = azapi_resource.test.name
+  parent_id = azapi_resource.test.parent_id
+  body      = azapi_resource.test.body
+}
+
+# Case 1b: Identity-based import with only ID (ID does NOT contain API version)
+# This imports the existing test resource using plain ID
+import {
+  to = azapi_resource.import_id_without_api_version
+  identity = {
+    id = azapi_resource.test.id
+  }
+}
+
+resource "azapi_resource" "import_id_without_api_version" {
+  type      = azapi_resource.test.type
+  name      = azapi_resource.test.name
+  parent_id = azapi_resource.test.parent_id
+  body      = azapi_resource.test.body
+}
+
+# Case 2: Identity-based import with both ID and Type
+# This imports the existing test resource using both ID and Type
+import {
+  to = azapi_resource.import_id_and_type
+  identity = {
+    id   = azapi_resource.test.id
+    type = azapi_resource.test.type
+  }
+}
+
+resource "azapi_resource" "import_id_and_type" {
+  type      = azapi_resource.test.type
+  name      = azapi_resource.test.name
+  parent_id = azapi_resource.test.parent_id
+  body      = azapi_resource.test.body
+}
+`, r.basic(data))
 }
 
 func (r GenericResource) complete(data acceptance.TestData) string {
@@ -1749,7 +1983,7 @@ resource "azapi_resource" "test2" {
 func (GenericResource) template(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 resource "azapi_resource" "resourceGroup" {
-  type     = "Microsoft.Resources/resourceGroups@2021-04-01"
+  type     = "Microsoft.Resources/resourceGroups@2023-07-01"
   name     = "acctestRG-%[1]d"
   location = "%[2]s"
 }
@@ -2420,6 +2654,739 @@ resource "azapi_resource" "test" {
 `, r.template(data), data.RandomString)
 }
 
+func (r GenericResource) moveStorageContainerSetup(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+resource "azurerm_storage_account" "sa" {
+  name                     = "acctestsa%[2]s"
+  location                 = azapi_resource.resourceGroup.location
+  resource_group_name      = azapi_resource.resourceGroup.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+resource "azurerm_storage_container" "ct" {
+  name                  = "acctestct%[2]s"
+  storage_account_name  = azurerm_storage_account.sa.name
+  container_access_type = "private"
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveStorageContainerStartMoving(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_storage_container.ct
+  to   = azapi_resource.test
+}
+
+resource "azurerm_storage_account" "sa" {
+  name                     = "acctestsa%[2]s"
+  location                 = azapi_resource.resourceGroup.location
+  resource_group_name      = azapi_resource.resourceGroup.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+//resource "azurerm_storage_container" "ct" {
+//  name                  = "acctestct%[2]s"
+//  storage_account_name  = azurerm_storage_account.sa.name
+//  container_access_type = "private"
+//}
+
+data "azapi_resource_id" "blobService" {
+  type      = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
+  parent_id = azurerm_storage_account.sa.id
+  name      = "default"
+}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
+  parent_id = data.azapi_resource_id.blobService.id
+  name      = "acctestct%[2]s"
+  body = {
+    properties = {}
+  }
+  ignore_casing             = false
+  schema_validation_enabled = true
+  ignore_missing_property   = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveStorageContainerUpdate(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_storage_container.ct
+  to   = azapi_resource.test
+}
+
+resource "azurerm_storage_account" "sa" {
+  name                     = "acctestsa%[2]s"
+  location                 = azapi_resource.resourceGroup.location
+  resource_group_name      = azapi_resource.resourceGroup.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+//resource "azurerm_storage_container" "ct" {
+//  name                  = "acctestct%[2]s"
+//  storage_account_name  = azurerm_storage_account.sa.name
+//  container_access_type = "private"
+//}
+
+data "azapi_resource_id" "blobService" {
+  type      = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
+  parent_id = azurerm_storage_account.sa.id
+  name      = "default"
+}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
+  parent_id = data.azapi_resource_id.blobService.id
+  name      = "acctestct%[2]s"
+  body = {
+    properties = {
+      publicAccess = "Blob"
+    }
+  }
+  ignore_casing             = false
+  schema_validation_enabled = true
+  ignore_missing_property   = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveStorageShareSetup(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+resource "azurerm_storage_account" "sa" {
+  name                     = "acctestsa%[2]s"
+  location                 = azapi_resource.resourceGroup.location
+  resource_group_name      = azapi_resource.resourceGroup.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+resource "azurerm_storage_share" "share" {
+  name                 = "acctestshare%[2]s"
+  storage_account_name = azurerm_storage_account.sa.name
+  quota                = 50
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveStorageShareStartMoving(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_storage_share.share
+  to   = azapi_resource.test
+}
+
+resource "azurerm_storage_account" "sa" {
+  name                     = "acctestsa%[2]s"
+  location                 = azapi_resource.resourceGroup.location
+  resource_group_name      = azapi_resource.resourceGroup.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+//resource "azurerm_storage_share" "share" {
+//  name                 = "acctestshare%[2]s"
+//  storage_account_name = azurerm_storage_account.sa.name
+//  quota                = 50
+//}
+
+data "azapi_resource_id" "fileService" {
+  type      = "Microsoft.Storage/storageAccounts/fileServices@2023-05-01"
+  parent_id = azurerm_storage_account.sa.id
+  name      = "default"
+}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01"
+  parent_id = data.azapi_resource_id.fileService.id
+  name      = "acctestshare%[2]s"
+  body = {
+    properties = {
+      shareQuota = 50
+    }
+  }
+  ignore_casing             = false
+  schema_validation_enabled = true
+  ignore_missing_property   = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveStorageShareUpdate(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_storage_share.share
+  to   = azapi_resource.test
+}
+
+resource "azurerm_storage_account" "sa" {
+  name                     = "acctestsa%[2]s"
+  location                 = azapi_resource.resourceGroup.location
+  resource_group_name      = azapi_resource.resourceGroup.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+//resource "azurerm_storage_share" "share" {
+//  name                 = "acctestshare%[2]s"
+//  storage_account_name = azurerm_storage_account.sa.name
+//  quota                = 50
+//}
+
+data "azapi_resource_id" "fileService" {
+  type      = "Microsoft.Storage/storageAccounts/fileServices@2023-05-01"
+  parent_id = azurerm_storage_account.sa.id
+  name      = "default"
+}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01"
+  parent_id = data.azapi_resource_id.fileService.id
+  name      = "acctestshare%[2]s"
+  body = {
+    properties = {
+      shareQuota = 100
+    }
+  }
+  ignore_casing             = false
+  schema_validation_enabled = true
+  ignore_missing_property   = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultSecretSetup(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+    ]
+
+    secret_permissions = [
+      "Set",
+      "Get",
+      "Delete",
+      "Purge",
+      "Recover"
+    ]
+  }
+}
+
+resource "azurerm_key_vault_secret" "sec" {
+  name         = "acctestsecret%[2]s"
+  value        = "s3cr3tValue"
+  key_vault_id = azurerm_key_vault.kv.id
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultSecretStartMoving(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_key_vault_secret.sec
+  to   = azapi_resource.test
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+    ]
+
+    secret_permissions = [
+      "Set",
+      "Get",
+      "Delete",
+      "Purge",
+      "Recover"
+    ]
+  }
+}
+
+//resource "azurerm_key_vault_secret" "sec" {
+//  name         = "acctestsecret%[2]s"
+//  value        = "s3cr3tValue"
+//  key_vault_id = azurerm_key_vault.kv.id
+//}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.KeyVault/vaults/secrets@2024-11-01"
+  parent_id = azurerm_key_vault.kv.id
+  name      = "acctestsecret%[2]s"
+  body = {
+    properties = {
+      value = "s3cr3tValue"
+    }
+  }
+  ignore_missing_property = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultSecretUpdate(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_key_vault_secret.sec
+  to   = azapi_resource.test
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+    ]
+
+    secret_permissions = [
+      "Set",
+      "Get",
+      "Delete",
+      "Purge",
+      "Recover"
+    ]
+  }
+}
+
+//resource "azurerm_key_vault_secret" "sec" {
+//  name         = "acctestsecret%[2]s"
+//  value        = "s3cr3tValue"
+//  key_vault_id = azurerm_key_vault.kv.id
+//}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.KeyVault/vaults/secrets@2024-11-01"
+  parent_id = azurerm_key_vault.kv.id
+  name      = "acctestsecret%[2]s"
+  body = {
+    properties = {
+      value = "updatedS3cr3tValue"
+    }
+  }
+  ignore_missing_property = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultSecretRemoved(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_key_vault_secret.sec
+  to   = azapi_resource.test
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+    ]
+
+    secret_permissions = [
+      "Set",
+      "Get",
+      "Delete",
+      "Purge",
+      "Recover"
+    ]
+  }
+}
+
+//resource "azurerm_key_vault_secret" "sec" {
+//  name         = "acctestsecret%[2]s"
+//  value        = "s3cr3tValue"
+//  key_vault_id = azurerm_key_vault.kv.id
+//}
+
+//resource "azapi_resource" "test" {
+//  type      = "Microsoft.KeyVault/vaults/secrets@2024-11-01"
+//  parent_id = azurerm_key_vault.kv.id
+//  name      = "acctestsecret%[2]s"
+//  body = {
+//    properties = {
+//      value = "updatedS3cr3tValue"
+//    }
+//  }
+//  ignore_missing_property = true
+//}
+
+removed {
+  from = azapi_resource.test
+  lifecycle {
+    destroy = false
+  }
+}
+
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultKeySetup(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+      "Update",
+      "GetRotationPolicy",
+      "SetRotationPolicy",
+    ]
+  }
+}
+
+resource "azurerm_key_vault_key" "key" {
+  name         = "acctestkey%[2]s"
+  key_vault_id = azurerm_key_vault.kv.id
+  key_type     = "RSA"
+  key_size     = 2048
+  key_opts     = ["encrypt", "decrypt"]
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultKeyStartMoving(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_key_vault_key.key
+  to   = azapi_resource.test
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+      "Update",
+      "GetRotationPolicy",
+      "SetRotationPolicy",
+    ]
+  }
+}
+
+//resource "azurerm_key_vault_key" "key" {
+//  name         = "acctestkey%[2]s"
+//  key_vault_id = azurerm_key_vault.kv.id
+//  key_type     = "RSA"
+//  key_size     = 2048
+//  key_opts     = ["encrypt", "decrypt"]
+//}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.KeyVault/vaults/keys@2024-11-01"
+  parent_id = azurerm_key_vault.kv.id
+  name      = "acctestkey%[2]s"
+  body = {
+    properties = {
+      kty     = "RSA"
+      keySize = 2048
+      keyOps  = ["encrypt", "decrypt"]
+    }
+  }
+  ignore_missing_property = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultKeyUpdate(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_key_vault_key.key
+  to   = azapi_resource.test
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+      "Update",
+      "GetRotationPolicy",
+      "SetRotationPolicy",
+    ]
+  }
+}
+
+//resource "azurerm_key_vault_key" "key" {
+//  name         = "acctestkey%[2]s"
+//  key_vault_id = azurerm_key_vault.kv.id
+//  key_type     = "RSA"
+//  key_size     = 2048
+//  key_opts     = ["encrypt", "decrypt"]
+//}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.KeyVault/vaults/keys@2024-11-01"
+  parent_id = azurerm_key_vault.kv.id
+  name      = "acctestkey%[2]s"
+  body = {
+    properties = {
+      kty     = "RSA"
+      keySize = 2048
+      keyOps  = ["encrypt", "decrypt"]
+      rotationPolicy = {
+        lifetimeActions = [
+          {
+            action = {
+              type = "rotate"
+            }
+            trigger = {
+              timeAfterCreate = "P90D"
+            }
+          },
+
+          {
+            action = {
+              type = "notify"
+            }
+            trigger = {
+              timeBeforeExpiry = "P30D"
+            }
+          },
+        ]
+      }
+    }
+  }
+  ignore_missing_property = true
+  ignore_casing           = true
+}
+`, r.template(data), data.RandomString)
+}
+
+func (r GenericResource) moveKeyVaultKeyRemoved(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%s
+
+provider "azurerm" {
+  features {}
+}
+
+moved {
+  from = azurerm_key_vault_key.key
+  to   = azapi_resource.test
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "kv" {
+  name                       = "acctestkv%[2]s"
+  location                   = azapi_resource.resourceGroup.location
+  resource_group_name        = azapi_resource.resourceGroup.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+      "Update",
+      "GetRotationPolicy",
+      "SetRotationPolicy",
+    ]
+  }
+}
+
+//resource "azurerm_key_vault_key" "key" {
+//  name         = "acctestkey%[2]s"
+//  key_vault_id = azurerm_key_vault.kv.id
+//  key_type     = "RSA"
+//  key_size     = 2048
+//  key_opts     = ["encrypt", "decrypt"]
+//}
+
+//resource "azapi_resource" "test" {
+//  type      = "Microsoft.KeyVault/vaults/keys@2024-11-01"
+//  parent_id = azurerm_key_vault.kv.id
+//  name      = "acctestkey%[2]s"
+//  body = {
+//    properties = {
+//      kty     = "RSA"
+//      keySize = 2048
+//      keyOps  = ["encrypt", "decrypt", "wrapKey"]
+//    }
+//  }
+//  ignore_missing_property = true
+//}
+
+removed {
+  from = azapi_resource.test
+  lifecycle {
+    destroy = false
+  }
+}
+`, r.template(data), data.RandomString)
+}
+
 func (r GenericResource) SensitiveBody(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 %s
@@ -2558,6 +3525,39 @@ resource "azapi_resource" "test" {
     ignore_changes = [
       tags
     ]
+  }
+}
+`, data.RandomInteger, data.LocationPrimary, data.RandomString)
+}
+
+func (r GenericResource) sensitiveBodyVersionWithEmptyBody(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+resource "azapi_resource" "resourceGroup" {
+  type     = "Microsoft.Resources/resourceGroups@2021-04-01"
+  name     = "acctestRG-%[1]d"
+  location = "%[2]s"
+  body     = {}
+}
+
+resource "azapi_resource" "test" {
+  type      = "Microsoft.Automation/automationAccounts@2024-10-23"
+  parent_id = azapi_resource.resourceGroup.id
+  name      = "acctest-%[3]s"
+  location  = "%[2]s"
+  body = {
+    properties = {
+      sku = {
+        name = "Basic"
+      }
+    }
+  }
+
+  sensitive_body = {
+
+  }
+
+  sensitive_body_version = {
+    "properties.publicNetworkAccess" = "1"
   }
 }
 `, data.RandomInteger, data.LocationPrimary, data.RandomString)

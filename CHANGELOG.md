@@ -1,3 +1,58 @@
+## v2.8.0 (Unreleased)
+
+FEATURES:
+- **New Provider Function**: snake2camel
+- **New Action**: `azapi_resource_action` - Perform stateless actions on Azure resources that can be invoked via Terraform action triggers
+
+ENHANCEMENTS:
+- `azapi_resource` resource: Add support for identity-based import, enabling import via resource ID and type from list resource protocol.
+- `azapi_resource` resource: Support listing resources via new ListResource protocol.
+- `azapi_resource` resource: Support listing all resources in a resource group when `type` is omitted. Uses ARM API `/subscriptions/{sub}/resourceGroups/{rg}/resources` to enumerate all resources.
+- `azapi_resource` resource: Refactor import logic to support identity block and multiple import scenarios (ID only, ID with API version, ID and type).
+- `azapi_data_plane_resource` resource: Adds a customization layer which allows custom CRUD operations for resources that don't follow standard patterns. 
+- `azapi_data_plane_resource` resource: Support `Microsoft.KeyVault/vaults/keys` type.
+- `azapi_data_plane_resource` resource: Support `Microsoft.KeyVault/vaults/secrets` type.
+- `azapi_data_plane_resource` resource: Support `Microsoft.Search/searchServices/datasources` type.
+- `azapi_data_plane_resource` resource: Support `Microsoft.Search/searchServices/indexers` type.
+- `azapi_data_plane_resource` resource: Support `Microsoft.Search/searchServices/indexes` type.
+- `azapi_data_plane_resource` resource: Support `Microsoft.Search/searchServices/skillsets` type.
+- `azapi_data_plane_resource` resource: Support `Microsoft.Search/searchServices/synonymmaps` type.
+- Bump Go version to 1.24.6 to address CVEs (GH-992).
+- Add more verified `azapi` examples.
+- Update bicep types to https://github.com/ms-henglu/bicep-types-az/commit/c41a40c0d2f9fa78b7ea0901b6634a13dc8e8b33
+
+BUG FIXES:
+- Fix validation logic for properties that are both `ReadOnly` and `Required`.
+- Fix panic when using `sensitive_body_version` with empty `sensitive_body` (GH-999). 
+- Fix `azapi_resource` resource move from `azurerm_storage_share` by converting `/fileshares/` to `/shares/` in resource ID.
+
+## v2.7.0
+
+ENHANCEMENTS:
+- `azapi_resource` resource: Refactor move-state logic to centrally derive ARM IDs from data-plane IDs for selected azurerm resources.
+- Add more verified `azapi` examples.
+- Add documentation for choosing the resource type.
+- `azapi_resource` data source: Support `ignore_not_found` argument and `exists` computed field to optionally suppress 404 errors and expose resource existence.
+- `azapi` provider: Support for disabling instance discovery via new `disable_instance_discovery` provider argument and `ARM_DISABLE_INSTANCE_DISCOVERY` environment variable (GH-964).
+- `azapi` provider: Support for explicit `custom` environment configuration where endpoints must be manually specified (GH-964).
+- Update bicep types to https://github.com/ms-henglu/bicep-types-az/commit/6b9ca69c973d29e6cf745cb5f25b13ee033de985
+
+BUG FIXES:
+- `azapi_client_config` data source: Fix a bug that specified subscription ID should not be overridden by Azure CLI default subscription ID.
+- `azapi_resource` resource: Support moving from `azurerm_storage_container` whose `id` is a data-plane URL by leveraging the `resource_manager_id` attribute (GH-955).
+- `azapi_resource` resource: Support moving from `azurerm_key_vault_secret` whose `id` is a data-plane URL by leveraging the `resource_versionless_id` attribute (GH-917).
+- `azapi_resource` resource: Support moving from `azurerm_key_vault_key` whose `id` is a data-plane URL by leveraging the `resource_versionless_id` attribute.
+- Fix panic in retry policy when HTTP response is nil (GH-985).
+
+## v2.6.1
+
+DEPRECATIONS:
+- `azapi` provider: The `maximum_busy_retry_attempts` field is deprecated and will be removed in the next major release. Please remove them from the `azapi` provider block. The provider will use the default value for this field.
+
+BUG FIXES:
+- Fix a regression issue when authenticating via Managed Identity (MSI).
+- Fix a regression issue that default retry policy doesn't work.
+
 ## v2.6.0
 
 DEPRECATIONS:
