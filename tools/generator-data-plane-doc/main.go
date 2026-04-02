@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -70,8 +71,8 @@ func main() {
 	newContent := replaceAvailableResourcesSection(string(templateContent), table, examples)
 
 	// Write the updated template
-	// #nosec G306
-	if err := os.WriteFile(*outputFile, []byte(newContent), 0644); err != nil {
+	cleanPath := filepath.Clean(*outputFile)
+	if err := os.WriteFile(cleanPath, []byte(newContent), 0644); err != nil { // #nosec G306,G703 -- output path is from a CLI flag with a safe default
 		log.Fatalf("Error writing template file: %v", err)
 	}
 
@@ -146,6 +147,9 @@ func replaceAvailableResourcesSection(templateContent, newTable, examples string
 		newSection += "\n## Resource Examples\n" + examples
 	}
 
+	// Append import section template directives
+	newSection += importSection()
+
 	// Check if there's content after the table (we want to preserve it)
 	// Find the end of the current table (next section or end of file)
 	remainingContent := templateContent[contentStart:]
@@ -177,4 +181,24 @@ func replaceAvailableResourcesSection(templateContent, newTable, examples string
 
 	// Construct the new content
 	return templateContent[:contentStart] + newSection + afterTable
+}
+
+// importSection returns the template directives for the Import section
+func importSection() string {
+	return `
+{{ if .HasImport -}}## Import
+
+{{ codefile "shell" (printf .ImportFile) | trimspace | prefixlines " " }}{{ end }}
+{{ if .HasImportIDConfig -}}
+
+### Import using resource ID:
+
+{{ tffile (printf .ImportIDConfigFile) | trimspace | prefixlines " " }}{{ end }}
+
+{{ if .HasImportIdentityConfig -}}
+
+### Import using identity:
+
+{{ tffile (printf .ImportIdentityConfigFile) | trimspace | prefixlines " " }}{{ end }}
+`
 }

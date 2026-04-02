@@ -4,6 +4,7 @@ import "github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 
 const (
 	AppConfiguration cloud.ServiceName = "AppConfiguration"
+	Foundry          cloud.ServiceName = "Foundry"
 	DeviceUpdate     cloud.ServiceName = "DeviceUpdate"
 	DigitalTwins     cloud.ServiceName = "DigitalTwins"
 	IoTCentral       cloud.ServiceName = "IoTCentral"
@@ -14,6 +15,10 @@ const (
 )
 
 func init() {
+	cloud.AzurePublic.Services[Foundry] = cloud.ServiceConfiguration{
+		Audience: "https://ai.azure.com",
+		Endpoint: "https://services.ai.azure.com",
+	}
 	cloud.AzurePublic.Services[AppConfiguration] = cloud.ServiceConfiguration{
 		Audience: "https://azconfig.io",
 		Endpoint: "https://azconfig.io",
@@ -33,6 +38,10 @@ func init() {
 	cloud.AzurePublic.Services[KeyVault] = cloud.ServiceConfiguration{
 		Audience: "https://vault.azure.net",
 		Endpoint: "https://vault.azure.net",
+	}
+	cloud.AzureGovernment.Services[KeyVault] = cloud.ServiceConfiguration{
+		Audience: "https://vault.usgovcloudapi.net",
+		Endpoint: "https://vault.usgovcloudapi.net",
 	}
 	cloud.AzurePublic.Services[Purview] = cloud.ServiceConfiguration{
 		Audience: "https://purview.azure.net",

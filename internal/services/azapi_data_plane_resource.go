@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Azure/terraform-provider-azapi/internal/clients"
@@ -46,6 +47,8 @@ type DataPlaneResourceModel struct {
 	ParentID                      types.String     `tfsdk:"parent_id"`
 	Type                          types.String     `tfsdk:"type"`
 	Body                          types.Dynamic    `tfsdk:"body"`
+	SensitiveBody                 types.Dynamic    `tfsdk:"sensitive_body"`
+	SensitiveBodyVersion          types.Map        `tfsdk:"sensitive_body_version"`
 	IgnoreCasing                  types.Bool       `tfsdk:"ignore_casing"`
 	IgnoreMissingProperty         types.Bool       `tfsdk:"ignore_missing_property"`
 	ReplaceTriggersExternalValues types.Dynamic    `tfsdk:"replace_triggers_external_values"`
@@ -73,6 +76,7 @@ var _ resource.Resource = &DataPlaneResource{}
 var _ resource.ResourceWithConfigure = &DataPlaneResource{}
 var _ resource.ResourceWithModifyPlan = &DataPlaneResource{}
 var _ resource.ResourceWithUpgradeState = &DataPlaneResource{}
+var _ resource.ResourceWithImportState = &DataPlaneResource{}
 
 func (r *DataPlaneResource) Configure(ctx context.Context, request resource.ConfigureRequest, response *resource.ConfigureResponse) {
 	tflog.Debug(ctx, "Configuring azapi_data_plane_resource")
@@ -105,11 +109,13 @@ func (r *DataPlaneResource) Schema(ctx context.Context, request resource.SchemaR
 			},
 
 			"name": schema.StringAttribute{
-				Required: true,
+				Optional: true,
+				Computed: true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
 				},
-				MarkdownDescription: "Specifies the name of the Azure resource. Changing this forces a new resource to be created.",
+				MarkdownDescription: "Specifies the name (identifier segment) of the data plane resource. Changing this forces a new resource to be created.",
 			},
 
 			"parent_id": schema.StringAttribute{
@@ -144,6 +150,18 @@ func (r *DataPlaneResource) Schema(ctx context.Context, request resource.SchemaR
 				Validators: []validator.Dynamic{
 					myvalidator.DynamicIsNotStringValidator(),
 				},
+			},
+
+			"sensitive_body": schema.DynamicAttribute{
+				Optional:            true,
+				WriteOnly:           true,
+				MarkdownDescription: docstrings.SensitiveBody(),
+			},
+
+			"sensitive_body_version": schema.MapAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				MarkdownDescription: docstrings.SensitiveBodyVersion(),
 			},
 
 			"ignore_casing": schema.BoolAttribute{
@@ -304,10 +322,27 @@ func (r *DataPlaneResource) ModifyPlan(ctx context.Context, request resource.Mod
 		return
 	}
 
+	if err := validateDataPlaneResourceName(config); err != nil {
+		response.Diagnostics.AddError("Invalid configuration", err.Error())
+		return
+	}
+
 	if state == nil || !plan.ResponseExportValues.Equal(state.ResponseExportValues) || !dynamic.SemanticallyEqual(plan.Body, state.Body) {
 		plan.Output = basetypes.NewDynamicUnknown()
 	} else {
 		plan.Output = state.Output
+	}
+
+	if state != nil {
+		// Set output as unknown to trigger a plan diff, if ephemral body has changed
+		diff, diags := ephemeralBodyChangeInPlan(ctx, request.Private, config.SensitiveBody, config.SensitiveBodyVersion, state.SensitiveBodyVersion)
+		if response.Diagnostics = append(response.Diagnostics, diags...); response.Diagnostics.HasError() {
+			return
+		}
+		if diff {
+			tflog.Info(ctx, `"sensitive_body" has changed`)
+			plan.Output = types.DynamicUnknown()
+		}
 	}
 
 	response.Diagnostics.Append(response.Plan.Set(ctx, plan)...)
@@ -355,7 +390,7 @@ func (r *DataPlaneResource) ModifyPlan(ctx context.Context, request resource.Mod
 }
 
 func (r *DataPlaneResource) Create(ctx context.Context, request resource.CreateRequest, response *resource.CreateResponse) {
-	r.CreateUpdate(ctx, request.Plan, &response.State, &response.Diagnostics)
+	r.CreateUpdate(ctx, request.Config, request.Plan, &response.State, &response.Diagnostics, response.Private)
 }
 
 func (r *DataPlaneResource) Update(ctx context.Context, request resource.UpdateRequest, response *resource.UpdateResponse) {
@@ -372,16 +407,49 @@ func (r *DataPlaneResource) Update(ctx context.Context, request resource.UpdateR
 		response.Diagnostics.Append(response.State.Set(ctx, plan)...)
 	}
 	tflog.Debug(ctx, "azapi_resource.CreateUpdate proceeding with external request as no skippable changes were detected")
-	r.CreateUpdate(ctx, request.Plan, &response.State, &response.Diagnostics)
+	r.CreateUpdate(ctx, request.Config, request.Plan, &response.State, &response.Diagnostics, response.Private)
 }
 
-func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, state *tfsdk.State, diagnostics *diag.Diagnostics) {
-	var model DataPlaneResourceModel
-	if diagnostics.Append(plan.Get(ctx, &model)...); diagnostics.HasError() {
+func (r *DataPlaneResource) CreateUpdate(ctx context.Context, requestConfig tfsdk.Config, requestPlan tfsdk.Plan, responseState *tfsdk.State, diagnostics *diag.Diagnostics, privateData PrivateData) {
+	var config, plan, state *DataPlaneResourceModel
+	diagnostics.Append(requestConfig.Get(ctx, &config)...)
+	diagnostics.Append(requestPlan.Get(ctx, &plan)...)
+	diagnostics.Append(responseState.Get(ctx, &state)...)
+	if diagnostics.HasError() {
 		return
 	}
 
-	id, err := parse.NewDataPlaneResourceId(model.Name.ValueString(), model.ParentID.ValueString(), model.Type.ValueString())
+	if err := validateDataPlaneResourceName(config); err != nil {
+		diagnostics.AddError("Invalid configuration", err.Error())
+		return
+	}
+
+	isNewResource := responseState == nil || responseState.Raw.IsNull()
+
+	customizedResource := customization.GetCustomization(plan.Type.ValueString())
+	createResultResource, hasCreateResult := func() (customization.DataPlaneResourceWithCreateResult, bool) {
+		if customizedResource == nil {
+			return nil, false
+		}
+		v, ok := (*customizedResource).(customization.DataPlaneResourceWithCreateResult)
+		if !ok {
+			return nil, false
+		}
+		if v.CreateResultFunc() == nil {
+			return nil, false
+		}
+		return v, true
+	}()
+
+	resourceName := strings.TrimSpace(plan.Name.ValueString())
+	if isNewResource && hasCreateResult {
+		resourceName = "__generated__"
+	}
+	if resourceName == "" {
+		diagnostics.AddError("Invalid configuration", `The argument "name" must be set for this resource type.`)
+		return
+	}
+	id, err := parse.NewDataPlaneResourceId(resourceName, plan.ParentID.ValueString(), plan.Type.ValueString())
 	if err != nil {
 		diagnostics.AddError("Invalid configuration", err.Error())
 		return
@@ -389,17 +457,15 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 
 	ctx = tflog.SetField(ctx, "resource_id", id.ID())
 
-	isNewResource := state == nil || state.Raw.IsNull()
-
 	var timeout time.Duration
 	var diags diag.Diagnostics
 	if isNewResource {
-		timeout, diags = model.Timeouts.Create(ctx, 30*time.Minute)
+		timeout, diags = plan.Timeouts.Create(ctx, 30*time.Minute)
 		if diagnostics.Append(diags...); diagnostics.HasError() {
 			return
 		}
 	} else {
-		timeout, diags = model.Timeouts.Update(ctx, 30*time.Minute)
+		timeout, diags = plan.Timeouts.Update(ctx, 30*time.Minute)
 		if diagnostics.Append(diags...); diagnostics.HasError() {
 			return
 		}
@@ -409,15 +475,14 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 	defer cancel()
 
 	client := r.ProviderData.DataPlaneClient
-	customizedResource := customization.GetCustomization(model.Type.ValueString())
 
-	if isNewResource {
+	if isNewResource && !hasCreateResult {
 		// check if the resource already exists using the non-retry client to avoid issue where user specifies
 		// a FooResourceNotFound error as a retryable error
 
 		requestOptions := clients.RequestOptions{
-			Headers:         common.AsMapOfString(model.ReadHeaders),
-			QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
+			Headers:         common.AsMapOfString(plan.ReadHeaders),
+			QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(plan.ReadQueryParameters)),
 		}
 		if customizedResource != nil && (*customizedResource).ReadFunc() != nil {
 			_, err = (*customizedResource).ReadFunc()(ctx, *r.ProviderData, id, requestOptions)
@@ -436,11 +501,24 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 	}
 
 	body := make(map[string]interface{})
-	if err := unmarshalBody(model.Body, &body); err != nil {
+	if err := unmarshalBody(plan.Body, &body); err != nil {
 		diagnostics.AddError("Invalid body", fmt.Sprintf(`The argument "body" is invalid: %s`, err.Error()))
 		return
 	}
-	lockIds := common.AsStringList(model.Locks)
+	sensitiveBodyVersionInState := types.MapNull(types.StringType)
+	if state != nil {
+		sensitiveBodyVersionInState = state.SensitiveBodyVersion
+	}
+	sensitiveBody, err := unmarshalSensitiveBody(config.SensitiveBody, plan.SensitiveBodyVersion, sensitiveBodyVersionInState)
+	if err != nil {
+		diagnostics.AddError("Invalid sensitive_body", fmt.Sprintf(`The argument "sensitive_body" is invalid: %s`, err.Error()))
+		return
+	}
+	if sensitiveBody != nil {
+		body = utils.MergeObject(body, sensitiveBody).(map[string]interface{})
+	}
+
+	lockIds := common.AsStringList(plan.Locks)
 	slices.Sort(lockIds)
 	for _, lockId := range lockIds {
 		locks.ByID(lockId)
@@ -448,12 +526,24 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 	}
 
 	requestOptions := clients.RequestOptions{
-		Headers:         common.AsMapOfString(model.CreateHeaders),
-		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.CreateQueryParameters)),
-		RetryOptions:    clients.NewRetryOptions(model.Retry),
+		Headers:         common.AsMapOfString(plan.CreateHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(plan.CreateQueryParameters)),
+		RetryOptions:    clients.NewRetryOptions(plan.Retry),
+	}
+
+	if !isNewResource {
+		requestOptions.Headers = common.AsMapOfString(plan.UpdateHeaders)
+		requestOptions.QueryParameters = clients.NewQueryParameters(common.AsMapOfLists(plan.UpdateQueryParameters))
 	}
 
 	switch {
+	case isNewResource && hasCreateResult:
+		var createdId parse.DataPlaneResourceId
+		createdId, _, err = createResultResource.CreateResultFunc()(ctx, *r.ProviderData, id, body, requestOptions)
+		if err == nil {
+			id = createdId
+			ctx = tflog.SetField(ctx, "resource_id", id.ID())
+		}
 	case isNewResource && customizedResource != nil && (*customizedResource).CreateFunc() != nil:
 		err = (*customizedResource).CreateFunc()(ctx, *r.ProviderData, id, body, requestOptions)
 	case !isNewResource && customizedResource != nil && (*customizedResource).UpdateFunc() != nil:
@@ -467,13 +557,13 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 	}
 
 	requestOptions = clients.RequestOptions{
-		Headers:         common.AsMapOfString(model.ReadHeaders),
-		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
+		Headers:         common.AsMapOfString(plan.ReadHeaders),
+		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(plan.ReadQueryParameters)),
 		RetryOptions: clients.CombineRetryOptions(
 			// Create a new retry option to handle specific case of transient 403/404 after resource creation
 			// If a read after create retry is not specified, use the default.
 			clients.NewRetryOptionsForReadAfterCreate(),
-			clients.NewRetryOptions(model.Retry),
+			clients.NewRetryOptions(plan.Retry),
 		),
 	}
 
@@ -486,23 +576,66 @@ func (r *DataPlaneResource) CreateUpdate(ctx context.Context, plan tfsdk.Plan, s
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
-			state.RemoveResource(ctx)
+			responseState.RemoveResource(ctx)
 			return
 		}
 		diagnostics.AddError("Failed to retrieve resource", fmt.Errorf("reading %s: %+v", id, err).Error())
 		return
 	}
 
-	model.ID = basetypes.NewStringValue(id.ID())
+	plan.ID = basetypes.NewStringValue(id.ID())
+	plan.Name = basetypes.NewStringValue(id.Name)
+	plan.ParentID = basetypes.NewStringValue(id.ParentId)
+	plan.Type = basetypes.NewStringValue(fmt.Sprintf("%s@%s", id.AzureResourceType, id.ApiVersion))
 
-	output, err := buildOutputFromBody(responseBody, model.ResponseExportValues, nil)
+	output, err := buildOutputFromBody(responseBody, plan.ResponseExportValues, nil)
 	if err != nil {
 		diagnostics.AddError("Failed to build output", err.Error())
 		return
 	}
-	model.Output = output
+	plan.Output = output
 
-	diagnostics.Append(state.Set(ctx, model)...)
+	diagnostics.Append(responseState.Set(ctx, plan)...)
+
+	if plan.SensitiveBodyVersion.IsNull() {
+		writeOnlyBytes, err := dynamic.ToJSON(config.SensitiveBody)
+		if err != nil {
+			diagnostics.AddError("Invalid sensitive_body", err.Error())
+			return
+		}
+		diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, writeOnlyBytes)...)
+	} else {
+		diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, nil)...)
+	}
+}
+
+func validateDataPlaneResourceName(config *DataPlaneResourceModel) error {
+	if config == nil || config.Type.IsNull() || config.Type.IsUnknown() {
+		return nil
+	}
+
+	customizedResource := customization.GetCustomization(config.Type.ValueString())
+	hasCreateResult := false
+	if customizedResource != nil {
+		if v, ok := (*customizedResource).(customization.DataPlaneResourceWithCreateResult); ok && v.CreateResultFunc() != nil {
+			hasCreateResult = true
+		}
+	}
+
+	if hasCreateResult {
+		if !config.Name.IsNull() && !config.Name.IsUnknown() && strings.TrimSpace(config.Name.ValueString()) != "" {
+			return fmt.Errorf(`the argument "name" should not be set for resource type %q because the service generates the identifier`, strings.Split(config.Type.ValueString(), "@")[0])
+		}
+		return nil
+	}
+
+	if config.Name.IsUnknown() {
+		return nil
+	}
+	if config.Name.IsNull() || strings.TrimSpace(config.Name.ValueString()) == "" {
+		return fmt.Errorf(`the argument "name" must be set for resource type %q`, strings.Split(config.Type.ValueString(), "@")[0])
+	}
+	return nil
 }
 
 func (r *DataPlaneResource) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
@@ -594,6 +727,44 @@ func (r *DataPlaneResource) Read(ctx context.Context, request resource.ReadReque
 	model.Type = basetypes.NewStringValue(fmt.Sprintf("%s@%s", id.AzureResourceType, id.ApiVersion))
 
 	response.Diagnostics.Append(response.State.Set(ctx, model)...)
+}
+
+func (r *DataPlaneResource) ImportState(ctx context.Context, request resource.ImportStateRequest, response *resource.ImportStateResponse) {
+	resourceID, resourceType, err := parseDataPlaneImportID(request.ID)
+	if err != nil {
+		response.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+
+	id, err := parse.DataPlaneResourceIDWithResourceType(resourceID, resourceType)
+	if err != nil {
+		response.Diagnostics.AddError("Invalid import ID", fmt.Errorf("parsing data plane resource ID %q with type %q: %+v", resourceID, resourceType, err).Error())
+		return
+	}
+
+	response.Diagnostics.Append(response.State.SetAttribute(ctx, path.Root("id"), id.ID())...)
+	response.Diagnostics.Append(response.State.SetAttribute(ctx, path.Root("name"), id.Name)...)
+	response.Diagnostics.Append(response.State.SetAttribute(ctx, path.Root("parent_id"), id.ParentId)...)
+	response.Diagnostics.Append(response.State.SetAttribute(ctx, path.Root("type"), fmt.Sprintf("%s@%s", id.AzureResourceType, id.ApiVersion))...)
+}
+
+func parseDataPlaneImportID(input string) (string, string, error) {
+	parts := strings.SplitN(input, "|", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("data plane import ID must be in format '<resource-id>|<type@api-version>', for example 'host/api/projects/myproject/agents/myagent|Microsoft.Foundry/agents@v1'")
+	}
+
+	resourceID := strings.TrimSpace(parts[0])
+	resourceType := strings.TrimSpace(parts[1])
+	if resourceID == "" || resourceType == "" {
+		return "", "", fmt.Errorf("data plane import ID must include both resource ID and type@api-version")
+	}
+
+	if _, _, err := utils.GetAzureResourceTypeApiVersion(resourceType); err != nil {
+		return "", "", fmt.Errorf("invalid resource type in import ID: %s", err)
+	}
+
+	return resourceID, resourceType, nil
 }
 
 func (r *DataPlaneResource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {

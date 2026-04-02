@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services/dynamic"
 	"github.com/Azure/terraform-provider-azapi/internal/services/migration"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myplanmodifier"
+	"github.com/Azure/terraform-provider-azapi/internal/services/myplanmodifier/planmodifierdynamic"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
 	"github.com/Azure/terraform-provider-azapi/internal/services/parse"
 	"github.com/Azure/terraform-provider-azapi/internal/skip"
@@ -36,25 +37,28 @@ import (
 )
 
 type AzapiUpdateResourceModel struct {
-	ID                    types.String     `tfsdk:"id"`
-	Name                  types.String     `tfsdk:"name"`
-	ParentID              types.String     `tfsdk:"parent_id"`
-	ResourceID            types.String     `tfsdk:"resource_id"`
-	Type                  types.String     `tfsdk:"type"`
-	Body                  types.Dynamic    `tfsdk:"body"`
-	SensitiveBody         types.Dynamic    `tfsdk:"sensitive_body"`
-	SensitiveBodyVersion  types.Map        `tfsdk:"sensitive_body_version"`
-	IgnoreCasing          types.Bool       `tfsdk:"ignore_casing"`
-	IgnoreMissingProperty types.Bool       `tfsdk:"ignore_missing_property"`
-	ResponseExportValues  types.Dynamic    `tfsdk:"response_export_values"`
-	Locks                 types.List       `tfsdk:"locks"`
-	Output                types.Dynamic    `tfsdk:"output"`
-	Timeouts              timeouts.Value   `tfsdk:"timeouts" skip_on:"update"`
-	Retry                 retry.RetryValue `tfsdk:"retry" skip_on:"update"`
-	UpdateHeaders         types.Map        `tfsdk:"update_headers"`
-	UpdateQueryParameters types.Map        `tfsdk:"update_query_parameters"`
-	ReadHeaders           types.Map        `tfsdk:"read_headers" skip_on:"update"`
-	ReadQueryParameters   types.Map        `tfsdk:"read_query_parameters" skip_on:"update"`
+	ID                            types.String     `tfsdk:"id"`
+	Name                          types.String     `tfsdk:"name"`
+	ParentID                      types.String     `tfsdk:"parent_id"`
+	ResourceID                    types.String     `tfsdk:"resource_id"`
+	Type                          types.String     `tfsdk:"type"`
+	Body                          types.Dynamic    `tfsdk:"body"`
+	SensitiveBody                 types.Dynamic    `tfsdk:"sensitive_body"`
+	SensitiveBodyVersion          types.Map        `tfsdk:"sensitive_body_version"`
+	IgnoreCasing                  types.Bool       `tfsdk:"ignore_casing"`
+	IgnoreMissingProperty         types.Bool       `tfsdk:"ignore_missing_property"`
+	ListUniqueIdProperty          types.Map        `tfsdk:"list_unique_id_property"`
+	IgnoreOtherItemsInList        types.List       `tfsdk:"ignore_other_items_in_list"`
+	ReplaceTriggersExternalValues types.Dynamic    `tfsdk:"replace_triggers_external_values"`
+	ResponseExportValues          types.Dynamic    `tfsdk:"response_export_values"`
+	Locks                         types.List       `tfsdk:"locks"`
+	Output                        types.Dynamic    `tfsdk:"output"`
+	Timeouts                      timeouts.Value   `tfsdk:"timeouts" skip_on:"update"`
+	Retry                         retry.RetryValue `tfsdk:"retry" skip_on:"update"`
+	UpdateHeaders                 types.Map        `tfsdk:"update_headers"`
+	UpdateQueryParameters         types.Map        `tfsdk:"update_query_parameters"`
+	ReadHeaders                   types.Map        `tfsdk:"read_headers" skip_on:"update"`
+	ReadQueryParameters           types.Map        `tfsdk:"read_query_parameters" skip_on:"update"`
 }
 
 type AzapiUpdateResource struct {
@@ -169,6 +173,36 @@ func (r *AzapiUpdateResource) Schema(ctx context.Context, request resource.Schem
 				MarkdownDescription: docstrings.SensitiveBodyVersion(),
 			},
 
+			"replace_triggers_external_values": schema.DynamicAttribute{
+				Optional: true,
+				MarkdownDescription: "Will trigger a replace of the resource when the value changes and is not `null`. This can be used by practitioners to force a replace of the resource when certain values change, e.g. changing the SKU of a virtual machine based on the value of variables or locals. " +
+					"The value is a `dynamic`, so practitioners can compose the input however they wish. For a \"break glass\" set the value to `null` to prevent the plan modifier taking effect. \n" +
+					"If you have `null` values that you do want to be tracked as affecting the resource replacement, include these inside an object. \n" +
+					"Advanced use cases are possible and resource replacement can be triggered by values external to the resource, for example when a dependent resource changes.\n\n" +
+					"e.g. to replace a resource when either the SKU or os_type attributes change:\n" +
+					"\n" +
+					"```hcl\n" +
+					"resource \"azapi_update_resource\" \"example\" {\n" +
+					"  resource_id = \"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example/providers/Microsoft.Network/publicIPAddresses/example\"\n" +
+					"  type        = \"Microsoft.Network/publicIPAddresses@2023-11-01\"\n" +
+					"  body = {\n" +
+					"    properties = {\n" +
+					"      sku   = var.sku\n" +
+					"      zones = var.zones\n" +
+					"    }\n" +
+					"  }\n" +
+					"\n" +
+					"  replace_triggers_external_values = [\n" +
+					"    var.sku,\n" +
+					"    var.zones,\n" +
+					"  ]\n" +
+					"}\n" +
+					"```\n",
+				PlanModifiers: []planmodifier.Dynamic{
+					planmodifierdynamic.RequiresReplaceIfNotNull(),
+				},
+			},
+
 			"ignore_casing": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
@@ -181,6 +215,21 @@ func (r *AzapiUpdateResource) Schema(ctx context.Context, request resource.Schem
 				Computed:            true,
 				Default:             defaults.BoolDefault(true),
 				MarkdownDescription: docstrings.IgnoreMissingProperty(),
+			},
+
+			"list_unique_id_property": schema.MapAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				MarkdownDescription: docstrings.ListUniqueIdProperty(),
+			},
+
+			"ignore_other_items_in_list": schema.ListAttribute{
+				ElementType: types.StringType,
+				Optional:    true,
+				Validators: []validator.List{
+					listvalidator.ValueStringsAre(myvalidator.StringIsNotEmpty()),
+				},
+				MarkdownDescription: docstrings.IgnoreOtherItemsInList(),
 			},
 
 			"response_export_values": schema.DynamicAttribute{
@@ -423,7 +472,11 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 	}
 
 	if requestBody != nil {
-		requestBody = utils.MergeObject(existing, requestBody)
+		mergeOption := utils.UpdateJsonOption{}
+		if v := common.AsMapOfString(model.ListUniqueIdProperty); len(v) != 0 {
+			mergeOption.ListUniqueIdProperty = v
+		}
+		requestBody = utils.MergeObjectWithOption(existing, requestBody, mergeOption)
 	} else {
 		requestBody = existing
 	}
@@ -438,7 +491,11 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 		return
 	}
 	if sensitiveBody != nil {
-		requestBody = utils.MergeObject(requestBody, sensitiveBody)
+		mergeOption := utils.UpdateJsonOption{}
+		if v := common.AsMapOfString(model.ListUniqueIdProperty); len(v) != 0 {
+			mergeOption.ListUniqueIdProperty = v
+		}
+		requestBody = utils.MergeObjectWithOption(requestBody, sensitiveBody, mergeOption)
 	}
 
 	if id.ResourceDef != nil {
@@ -562,6 +619,16 @@ func (r *AzapiUpdateResource) Read(ctx context.Context, request resource.ReadReq
 	option := utils.UpdateJsonOption{
 		IgnoreCasing:          model.IgnoreCasing.ValueBool(),
 		IgnoreMissingProperty: model.IgnoreMissingProperty.ValueBool(),
+	}
+	if v := common.AsMapOfString(model.ListUniqueIdProperty); len(v) != 0 {
+		option.ListUniqueIdProperty = v
+	}
+	if paths := common.AsStringList(model.IgnoreOtherItemsInList); len(paths) != 0 {
+		m := make(map[string]bool)
+		for _, p := range paths {
+			m[p] = true
+		}
+		option.IgnoreOtherItemsInList = m
 	}
 	body := utils.UpdateObject(requestBody, responseBody, option)
 

@@ -675,6 +675,12 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 	if !model.MaximumBusyRetryAttempts.IsNull() {
 		maxGoSdkRetryAttempts = model.MaximumBusyRetryAttempts.ValueInt32()
 	}
+	var auxTenants []string
+	if elements := model.AuxiliaryTenantIDs.Elements(); len(elements) != 0 {
+		for _, element := range elements {
+			auxTenants = append(auxTenants, element.(basetypes.StringValue).ValueString())
+		}
+	}
 
 	copt := &clients.Option{
 		Cred:                 cred,
@@ -695,6 +701,7 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		SubscriptionId:              model.SubscriptionID.ValueString(),
 		TenantId:                    model.TenantID.ValueString(),
 		CustomHeaders:               customHeaders,
+		AuxiliaryTenants:            auxTenants,
 	}
 
 	client := &clients.Client{}

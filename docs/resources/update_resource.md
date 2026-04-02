@@ -99,6 +99,8 @@ This resource can manage a subset of any existing Azure resource manager resourc
 - `body` (Dynamic) A dynamic attribute that contains the request body.
 - `ignore_casing` (Boolean) Whether ignore the casing of the property names in the response body. Defaults to `false`.
 - `ignore_missing_property` (Boolean) Whether ignore not returned properties like credentials in `body` to suppress plan-diff. Defaults to `true`. It's recommend to enable this option when some sensitive properties are not returned in response body, instead of setting them in `lifecycle.ignore_changes` because it will make the sensitive fields unable to update.
+- `ignore_other_items_in_list` (List of String) A list of list property paths where items not specified in configuration should be ignored. This is intended for partial list management when combined with `list_unique_id_property` (for example, to avoid perpetual drift from server-side ordering).
+- `list_unique_id_property` (Map of String) A mapping of list property paths to the field name used as a unique identifier when comparing and merging list items. When not set, list items are matched by a `name` property (if present) or by list ordering. To match using multiple fields, specify a comma-separated list of field names (e.g., `"category, categoryGroup"`).
 - `locks` (List of String) A list of ARM resource IDs which are used to avoid create/modify/delete azapi resources at the same time.
 - `name` (String) Specifies the name of the Azure resource. Changing this forces a new resource to be created.
 - `parent_id` (String) The ID of the azure resource in which this resource is created. It supports different kinds of deployment scope for **top level** resources:
@@ -114,6 +116,29 @@ This resource can manage a subset of any existing Azure resource manager resourc
   For type `Microsoft.Resources/resourceGroups`, the `parent_id` could be omitted, it defaults to subscription ID specified in provider or the default subscription (You could check the default subscription by azure cli command: `az account show`).
 - `read_headers` (Map of String) A mapping of headers to be sent with the read request.
 - `read_query_parameters` (Map of List of String) A mapping of query parameters to be sent with the read request.
+- `replace_triggers_external_values` (Dynamic) Will trigger a replace of the resource when the value changes and is not `null`. This can be used by practitioners to force a replace of the resource when certain values change, e.g. changing the SKU of a virtual machine based on the value of variables or locals. The value is a `dynamic`, so practitioners can compose the input however they wish. For a "break glass" set the value to `null` to prevent the plan modifier taking effect. 
+If you have `null` values that you do want to be tracked as affecting the resource replacement, include these inside an object. 
+Advanced use cases are possible and resource replacement can be triggered by values external to the resource, for example when a dependent resource changes.
+
+e.g. to replace a resource when either the SKU or os_type attributes change:
+
+```hcl
+resource "azapi_update_resource" "example" {
+  resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example/providers/Microsoft.Network/publicIPAddresses/example"
+  type        = "Microsoft.Network/publicIPAddresses@2023-11-01"
+  body = {
+    properties = {
+      sku   = var.sku
+      zones = var.zones
+    }
+  }
+
+  replace_triggers_external_values = [
+    var.sku,
+    var.zones,
+  ]
+}
+```
 - `resource_id` (String) The ID of an existing Azure source.
 - `response_export_values` (Dynamic) The attribute can accept either a list or a map.
 
