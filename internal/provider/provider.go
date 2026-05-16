@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services"
 	"github.com/Azure/terraform-provider-azapi/internal/services/functions"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
+	azapistatestore "github.com/Azure/terraform-provider-azapi/internal/statestore"
 	"github.com/Azure/terraform-provider-azapi/version"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -33,6 +34,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/statestore"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	tffwdocs "github.com/magodo/terraform-plugin-framework-docs"
@@ -43,6 +45,7 @@ var _ provider.ProviderWithFunctions = &Provider{}
 var _ provider.ProviderWithEphemeralResources = &Provider{}
 var _ provider.ProviderWithListResources = &Provider{}
 var _ provider.ProviderWithActions = &Provider{}
+var _ provider.ProviderWithStateStores = &Provider{}
 var _ tffwdocs.ProviderWithRenderOption = &Provider{}
 
 func AzureProvider() provider.Provider {
@@ -706,6 +709,7 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 	response.EphemeralResourceData = client
 	response.ListResourceData = client
 	response.ActionData = client
+	response.StateStoreData = client
 }
 
 func (p Provider) Functions(ctx context.Context) []func() function.Function {
@@ -785,6 +789,12 @@ func (p Provider) ListResources(ctx context.Context) []func() list.ListResource 
 func (p Provider) Actions(ctx context.Context) []func() action.Action {
 	return []func() action.Action{
 		func() action.Action { return &services.AzapiResourceAction{} },
+	}
+}
+
+func (p Provider) StateStores(ctx context.Context) []func() statestore.StateStore {
+	return []func() statestore.StateStore{
+		azapistatestore.NewStorageBlobStateStore,
 	}
 }
 
