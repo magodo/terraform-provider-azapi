@@ -17,7 +17,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/terraform-provider-azapi/internal/clients"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/statestore"
 	ststschema "github.com/hashicorp/terraform-plugin-framework/statestore/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -126,7 +125,19 @@ func (s *StorageBlobStateStore) Initialize(ctx context.Context, req statestore.I
 
 	endpoint := strings.TrimSpace(cfg.Endpoint.ValueString())
 	if endpoint == "" {
-		endpoint = defaultBlobEndpoint(account, client.Option.CloudCfg)
+		suffix := "blob.core.windows.net"
+		// Best-effort: derive the suffix from the resource manager endpoint, which has
+		// no public mapping to the storage suffix in the SDK. The common known
+		// clouds are handled explicitly.
+		if rm, ok := client.Option.CloudCfg.Services[cloud.ResourceManager]; ok {
+			switch {
+			case strings.Contains(rm.Endpoint, "chinacloudapi.cn"):
+				suffix = "blob.core.chinacloudapi.cn"
+			case strings.Contains(rm.Endpoint, "usgovcloudapi.net"):
+				suffix = "blob.core.usgovcloudapi.net"
+			}
+		}
+		endpoint = fmt.Sprintf("https://%s.%s", account, suffix)
 	}
 	if _, err := url.Parse(endpoint); err != nil {
 		resp.Diagnostics.AddError("Invalid Endpoint", fmt.Sprintf("Could not parse blob endpoint %q: %s", endpoint, err))
@@ -165,32 +176,7 @@ func (s *StorageBlobStateStore) Configure(_ context.Context, req statestore.Conf
 	*s = *data
 }
 
-// defaultBlobEndpoint returns the default blob endpoint for the configured cloud.
-func defaultBlobEndpoint(account string, cloudCfg cloud.Configuration) string {
-	suffix := "blob.core.windows.net"
-	// Best-effort: derive the suffix from the resource manager endpoint, which has
-	// no public mapping to the storage suffix in the SDK. The common known
-	// clouds are handled explicitly.
-	if rm, ok := cloudCfg.Services[cloud.ResourceManager]; ok {
-		switch {
-		case strings.Contains(rm.Endpoint, "chinacloudapi.cn"):
-			suffix = "blob.core.chinacloudapi.cn"
-		case strings.Contains(rm.Endpoint, "usgovcloudapi.net"):
-			suffix = "blob.core.usgovcloudapi.net"
-		}
-	}
-	return fmt.Sprintf("https://%s.%s", account, suffix)
-}
-
-func (s *StorageBlobStateStore) requireConfigured(diags *diag.Diagnostics) bool {
-	if s.containerClient == nil {
-		diags.AddError("State Store Not Configured", "Internal error: state store client was not initialized.")
-		return false
-	}
-	return true
-}
-
-func (s *StorageBlobStateStore) blob(name string) *blob.Client {
+func (s *StorageBlobStateStore) BlobClient(name string) *blob.Client {
 	return s.containerClient.NewBlobClient(name)
 }
 
@@ -199,10 +185,6 @@ func isBlobNotFound(err error) bool {
 }
 
 func (s *StorageBlobStateStore) GetStates(ctx context.Context, _ statestore.GetStatesRequest, resp *statestore.GetStatesResponse) {
-	if !s.requireConfigured(&resp.Diagnostics) {
-		return
-	}
-
 	// We cannot enumerate "states" without knowing the configured key. To
 	// support all keys present in the container, list all blobs and infer
 	// workspaces from the "env:" separator convention. This matches the
@@ -223,11 +205,8 @@ func (s *StorageBlobStateStore) GetStates(ctx context.Context, _ statestore.GetS
 			if strings.HasSuffix(name, ".tflock") {
 				continue
 			}
-			if idx := strings.Index(name, "env:"); idx >= 0 {
-				ws := name[idx+len("env:"):]
-				if ws != "" {
-					seen[ws] = struct{}{}
-				}
+			if _, ws, ok := strings.Cut(name, "env:"); ok && ws != "" {
+				seen[ws] = struct{}{}
 			}
 		}
 	}
@@ -248,11 +227,8 @@ func (s *StorageBlobStateStore) resolveBlob(stateID string) string {
 }
 
 func (s *StorageBlobStateStore) Read(ctx context.Context, req statestore.ReadRequest, resp *statestore.ReadResponse) {
-	if !s.requireConfigured(&resp.Diagnostics) {
-		return
-	}
 	name := s.resolveBlob(req.StateID)
-	dl, err := s.blob(name).DownloadStream(ctx, nil)
+	dl, err := s.BlobClient(name).DownloadStream(ctx, nil)
 	if err != nil {
 		if isBlobNotFound(err) {
 			// An empty response indicates "no state".
@@ -272,12 +248,9 @@ func (s *StorageBlobStateStore) Read(ctx context.Context, req statestore.ReadReq
 }
 
 func (s *StorageBlobStateStore) Write(ctx context.Context, req statestore.WriteRequest, resp *statestore.WriteResponse) {
-	if !s.requireConfigured(&resp.Diagnostics) {
-		return
-	}
 	name := s.resolveBlob(req.StateID)
 	if s.snapshot {
-		bc := s.blob(name)
+		bc := s.BlobClient(name)
 		if _, err := bc.CreateSnapshot(ctx, nil); err != nil && !isBlobNotFound(err) {
 			resp.Diagnostics.AddError("Failed to Snapshot State", err.Error())
 			return
@@ -290,23 +263,17 @@ func (s *StorageBlobStateStore) Write(ctx context.Context, req statestore.WriteR
 }
 
 func (s *StorageBlobStateStore) DeleteState(ctx context.Context, req statestore.DeleteStateRequest, resp *statestore.DeleteStateResponse) {
-	if !s.requireConfigured(&resp.Diagnostics) {
-		return
-	}
 	if req.StateID == "" || req.StateID == "default" {
 		resp.Diagnostics.AddError("Cannot Delete Default Workspace", "The default workspace cannot be deleted from a state store.")
 		return
 	}
 	name := s.resolveBlob(req.StateID)
-	if _, err := s.blob(name).Delete(ctx, nil); err != nil && !isBlobNotFound(err) {
+	if _, err := s.BlobClient(name).Delete(ctx, nil); err != nil && !isBlobNotFound(err) {
 		resp.Diagnostics.AddError("Failed to Delete State", fmt.Sprintf("blob %q: %s", name, err))
 	}
 }
 
 func (s *StorageBlobStateStore) Lock(ctx context.Context, req statestore.LockRequest, resp *statestore.LockResponse) {
-	if !s.requireConfigured(&resp.Diagnostics) {
-		return
-	}
 	lockName := s.resolveBlob(req.StateID) + ".tflock"
 	info := statestore.NewLockInfo(req)
 	body, err := json.Marshal(info)
@@ -342,9 +309,6 @@ func (s *StorageBlobStateStore) Lock(ctx context.Context, req statestore.LockReq
 }
 
 func (s *StorageBlobStateStore) Unlock(ctx context.Context, req statestore.UnlockRequest, resp *statestore.UnlockResponse) {
-	if !s.requireConfigured(&resp.Diagnostics) {
-		return
-	}
 	lockName := s.resolveBlob(req.StateID) + ".tflock"
 
 	existing, err := s.readLockInfo(ctx, lockName)
@@ -363,14 +327,14 @@ func (s *StorageBlobStateStore) Unlock(ctx context.Context, req statestore.Unloc
 		)
 		return
 	}
-	if _, err := s.blob(lockName).Delete(ctx, nil); err != nil && !isBlobNotFound(err) {
+	if _, err := s.BlobClient(lockName).Delete(ctx, nil); err != nil && !isBlobNotFound(err) {
 		resp.Diagnostics.AddError("Failed to Release Lock", err.Error())
 	}
 }
 
 func (s *StorageBlobStateStore) readLockInfo(ctx context.Context, name string) (statestore.LockInfo, error) {
 	var info statestore.LockInfo
-	dl, err := s.blob(name).DownloadStream(ctx, nil)
+	dl, err := s.BlobClient(name).DownloadStream(ctx, nil)
 	if err != nil {
 		return info, err
 	}
