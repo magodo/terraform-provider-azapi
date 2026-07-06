@@ -15,8 +15,6 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
-	"strings"
-	"unicode"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -24,163 +22,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
-
-// -----------------------------------------------------------------------------
-// Options / NameMapper
-// -----------------------------------------------------------------------------
-
-// NameMapper translates between framework Object attribute names (typically
-// snake_case) and API/JSON field names (typically camelCase) in both
-// directions. It is consulted at every nesting level for every Object
-// attribute key. Map values and DynamicType-inferred object keys are NOT
-// passed through the mapper.
-type NameMapper interface {
-	// ToAPI converts a TF Object attribute name (snake_case) to the API
-	// field name used in the wire model.
-	ToAPI(tfName string) string
-	// ToTF converts an API field name back to a TF Object attribute name.
-	ToTF(apiName string) string
-}
-
-// SnakeCamelMapper is the default NameMapper: snake_case <-> camelCase. An
-// optional Overrides map (TF-name -> API-name) takes precedence over the
-// default translation, in both directions.
-type SnakeCamelMapper struct {
-	Overrides map[string]string
-	// reverse is a lazily-computed inverse of Overrides for ToTF lookups.
-	reverse map[string]string
-}
-
-// ToAPI implements NameMapper.
-func (m *SnakeCamelMapper) ToAPI(tfName string) string {
-	if v, ok := m.Overrides[tfName]; ok {
-		return v
-	}
-	return SnakeToCamel(tfName)
-}
-
-// ToTF implements NameMapper.
-func (m *SnakeCamelMapper) ToTF(apiName string) string {
-	if m.reverse == nil && len(m.Overrides) > 0 {
-		m.reverse = make(map[string]string, len(m.Overrides))
-		for tf, api := range m.Overrides {
-			m.reverse[api] = tf
-		}
-	}
-	if v, ok := m.reverse[apiName]; ok {
-		return v
-	}
-	return CamelToSnake(apiName)
-}
-
-// identityMapper does no translation (used as the default when no mapper is
-// supplied, to preserve backwards-compatible behaviour of tfconv).
-type identityMapper struct{}
-
-func (identityMapper) ToAPI(name string) string { return name }
-func (identityMapper) ToTF(name string) string  { return name }
-
-// Option configures Expand / Flatten.
-type Option func(*config)
-
-type config struct {
-	mapper NameMapper
-}
-
-func newConfig(opts []Option) *config {
-	c := &config{mapper: identityMapper{}}
-	for _, o := range opts {
-		o(c)
-	}
-	return c
-}
-
-// WithNameMapper sets the NameMapper used to translate Object attribute
-// names during Expand / Flatten. Pass &SnakeCamelMapper{} for the common
-// snake_case <-> camelCase behaviour.
-func WithNameMapper(m NameMapper) Option {
-	return func(c *config) {
-		if m != nil {
-			c.mapper = m
-		}
-	}
-}
-
-// WithSnakeCamel is a convenience for WithNameMapper(&SnakeCamelMapper{...}).
-func WithSnakeCamel(overrides ...map[string]string) Option {
-	m := &SnakeCamelMapper{}
-	if len(overrides) > 0 {
-		m.Overrides = overrides[0]
-	}
-	return WithNameMapper(m)
-}
-
-// -----------------------------------------------------------------------------
-// snake_case <-> camelCase helpers
-// -----------------------------------------------------------------------------
-
-// SnakeToCamel converts "some_field_name" to "someFieldName". Leading and
-// trailing underscores are preserved as best-effort.
-func SnakeToCamel(s string) string {
-	if s == "" {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	upperNext := false
-	for i, r := range s {
-		if r == '_' {
-			if i == 0 || i == len(s)-1 {
-				// Preserve leading/trailing underscore.
-				b.WriteRune(r)
-				continue
-			}
-			upperNext = true
-			continue
-		}
-		if upperNext {
-			b.WriteRune(unicode.ToUpper(r))
-			upperNext = false
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// CamelToSnake converts "someFieldName" to "some_field_name". It also
-// handles ALL-CAPS acronyms: "HTTPServer" -> "http_server", "URL" -> "url".
-func CamelToSnake(s string) string {
-	if s == "" {
-		return s
-	}
-	runes := []rune(s)
-	var b strings.Builder
-	b.Grow(len(s) + 4)
-	for i, r := range runes {
-		if unicode.IsUpper(r) {
-			// Insert '_' before this upper rune when:
-			//   - previous rune is lowercase/digit (word boundary), OR
-			//   - previous rune is upper AND next rune is lowercase
-			//     (start of a new word after an acronym, e.g. "HTTPServer").
-			if i > 0 {
-				prev := runes[i-1]
-				var next rune
-				if i+1 < len(runes) {
-					next = runes[i+1]
-				}
-				if unicode.IsLower(prev) || unicode.IsDigit(prev) ||
-					(unicode.IsUpper(prev) && next != 0 && unicode.IsLower(next)) {
-					b.WriteRune('_')
-				}
-			}
-			b.WriteRune(unicode.ToLower(r))
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
 
 // -----------------------------------------------------------------------------
 // Expand: attr.Value  ->  Go native
@@ -191,11 +32,14 @@ func CamelToSnake(s string) string {
 // nil. Object attribute keys are translated through the supplied NameMapper
 // (default: identity). Map values and Dynamic-inferred object keys are
 // NEVER translated.
-func Expand(ctx context.Context, v attr.Value, opts ...Option) (any, diag.Diagnostics) {
-	return expand(ctx, v, newConfig(opts))
+func Expand(ctx context.Context, v attr.Value, opt *Option) (any, diag.Diagnostics) {
+	if opt == nil {
+		opt = new(NewDefaultOption())
+	}
+	return expand(ctx, v, *opt)
 }
 
-func expand(ctx context.Context, v attr.Value, cfg *config) (any, diag.Diagnostics) {
+func expand(ctx context.Context, v attr.Value, opt Option) (any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if v == nil || v.IsNull() || v.IsUnknown() {
 		return nil, nil
@@ -209,7 +53,7 @@ func expand(ctx context.Context, v attr.Value, cfg *config) (any, diag.Diagnosti
 			return nil, diags
 		}
 		// Underlying is user data — bypass name translation.
-		return expandUntranslated(ctx, dv.UnderlyingValue(), cfg)
+		return expandUntranslated(ctx, dv.UnderlyingValue(), opt)
 	case basetypes.BoolValuable:
 		bv, d := tv.ToBoolValue(ctx)
 		diags.Append(d...)
@@ -265,14 +109,14 @@ func expand(ctx context.Context, v attr.Value, cfg *config) (any, diag.Diagnosti
 		if diags.HasError() {
 			return nil, diags
 		}
-		return expandSlice(ctx, lv.Elements(), cfg)
+		return expandSlice(ctx, lv.Elements(), opt)
 	case basetypes.SetValuable:
 		sv, d := tv.ToSetValue(ctx)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
-		return expandSlice(ctx, sv.Elements(), cfg)
+		return expandSlice(ctx, sv.Elements(), opt)
 	case basetypes.MapValuable:
 		mv, d := tv.ToMapValue(ctx)
 		diags.Append(d...)
@@ -280,16 +124,16 @@ func expand(ctx context.Context, v attr.Value, cfg *config) (any, diag.Diagnosti
 			return nil, diags
 		}
 		// Map keys are user data — never translate.
-		return expandStringMap(ctx, mv.Elements(), cfg, false)
+		return expandStringMap(ctx, mv.Elements(), opt, false)
 	case basetypes.ObjectValuable:
 		ov, d := tv.ToObjectValue(ctx)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
-		return expandStringMap(ctx, ov.Attributes(), cfg, true)
+		return expandStringMap(ctx, ov.Attributes(), opt, true)
 	case basetypes.TupleValue:
-		return expandSlice(ctx, tv.Elements(), cfg)
+		return expandSlice(ctx, tv.Elements(), opt)
 	}
 
 	diags.AddError("Unsupported attr.Value in tfconv.Expand",
@@ -299,17 +143,17 @@ func expand(ctx context.Context, v attr.Value, cfg *config) (any, diag.Diagnosti
 
 // expandUntranslated forces the sub-tree to skip name translation. Used for
 // Dynamic underlying values (which have no schema).
-func expandUntranslated(ctx context.Context, v attr.Value, cfg *config) (any, diag.Diagnostics) {
+func expandUntranslated(ctx context.Context, v attr.Value, opt Option) (any, diag.Diagnostics) {
 	sub := &config{mapper: identityMapper{}}
-	_ = cfg // preserved for future use if we need path-scoped mapping
+	_ = opt // preserved for future use if we need path-scoped mapping
 	return expand(ctx, v, sub)
 }
 
-func expandSlice(ctx context.Context, elems []attr.Value, cfg *config) ([]any, diag.Diagnostics) {
+func expandSlice(ctx context.Context, elems []attr.Value, opt Option) ([]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	out := make([]any, 0, len(elems))
 	for _, e := range elems {
-		raw, d := expand(ctx, e, cfg)
+		raw, d := expand(ctx, e, opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -321,18 +165,18 @@ func expandSlice(ctx context.Context, elems []attr.Value, cfg *config) ([]any, d
 
 // expandStringMap writes children into a map. When translate is true, keys
 // are passed through cfg.mapper.ToAPI; otherwise they're used verbatim.
-func expandStringMap(ctx context.Context, elems map[string]attr.Value, cfg *config, translate bool) (map[string]any, diag.Diagnostics) {
+func expandStringMap(ctx context.Context, elems map[string]attr.Value, opt Option, translate bool) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	out := make(map[string]any, len(elems))
 	for k, e := range elems {
-		raw, d := expand(ctx, e, cfg)
+		raw, d := expand(ctx, e, opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
 		outKey := k
 		if translate {
-			outKey = cfg.mapper.ToAPI(k)
+			outKey = opt.NameMapper.ToCamelCase(k)
 		}
 		out[outKey] = raw
 	}
@@ -347,11 +191,14 @@ func expandStringMap(ctx context.Context, elems map[string]attr.Value, cfg *conf
 // targetType. Object attribute keys in `data` are looked up by translating
 // the schema (TF) name through the NameMapper's ToAPI. Map values and
 // DynamicType-inferred object keys are used verbatim.
-func Flatten(ctx context.Context, targetType attr.Type, data any, opts ...Option) (attr.Value, diag.Diagnostics) {
-	return flatten(ctx, targetType, data, newConfig(opts))
+func Flatten(ctx context.Context, targetType attr.Type, data any, opt *Option) (attr.Value, diag.Diagnostics) {
+	if opt == nil {
+		opt = new(NewDefaultOption())
+	}
+	return flatten(ctx, targetType, data, *opt)
 }
 
-func flatten(ctx context.Context, targetType attr.Type, data any, cfg *config) (attr.Value, diag.Diagnostics) {
+func flatten(ctx context.Context, targetType attr.Type, data any, opt Option) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if data == nil {
 		return nullValue(ctx, targetType)
@@ -427,15 +274,15 @@ func flatten(ctx context.Context, targetType attr.Type, data any, cfg *config) (
 		diags.Append(d...)
 		return v, diags
 	case basetypes.ObjectTypable:
-		return flattenObject(ctx, t, data, cfg)
+		return flattenObject(ctx, t, data, opt)
 	case basetypes.MapTypable:
-		return flattenMap(ctx, t, data, cfg)
+		return flattenMap(ctx, t, data, opt)
 	case basetypes.SetTypable:
-		return flattenSet(ctx, t, data, cfg)
+		return flattenSet(ctx, t, data, opt)
 	case basetypes.ListTypable:
-		return flattenList(ctx, t, data, cfg)
+		return flattenList(ctx, t, data, opt)
 	case basetypes.TupleType:
-		return flattenTuple(ctx, t, data, cfg)
+		return flattenTuple(ctx, t, data, opt)
 	}
 
 	diags.AddError("Unsupported attr.Type in tfconv.Flatten",
@@ -443,7 +290,7 @@ func flatten(ctx context.Context, targetType attr.Type, data any, cfg *config) (
 	return nil, diags
 }
 
-func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, cfg *config) (attr.Value, diag.Diagnostics) {
+func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, opt Option) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	m, ok := data.(map[string]any)
 	if !ok {
@@ -458,8 +305,8 @@ func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, cfg
 	attrTypes := withAttrs.AttributeTypes()
 	attrs := make(map[string]attr.Value, len(attrTypes))
 	for tfName, at := range attrTypes {
-		apiName := cfg.mapper.ToAPI(tfName)
-		child, d := flatten(ctx, at, m[apiName], cfg)
+		apiName := opt.NameMapper.ToCamelCase(tfName)
+		child, d := flatten(ctx, at, m[apiName], opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -476,7 +323,7 @@ func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, cfg
 	return v, diags
 }
 
-func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, cfg *config) (attr.Value, diag.Diagnostics) {
+func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, opt Option) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	m, ok := data.(map[string]any)
 	if !ok {
@@ -486,7 +333,7 @@ func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, cfg *conf
 	elems := make(map[string]attr.Value, len(m))
 	for k, raw := range m {
 		// Map keys are user data — not translated.
-		child, d := flatten(ctx, et, raw, cfg)
+		child, d := flatten(ctx, et, raw, opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -503,7 +350,7 @@ func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, cfg *conf
 	return v, diags
 }
 
-func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, cfg *config) (attr.Value, diag.Diagnostics) {
+func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, opt Option) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
@@ -512,7 +359,7 @@ func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, cfg *conf
 	et := any(t).(attr.TypeWithElementType).ElementType()
 	elems := make([]attr.Value, 0, len(s))
 	for _, raw := range s {
-		child, d := flatten(ctx, et, raw, cfg)
+		child, d := flatten(ctx, et, raw, opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -529,7 +376,7 @@ func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, cfg *conf
 	return v, diags
 }
 
-func flattenList(ctx context.Context, t basetypes.ListTypable, data any, cfg *config) (attr.Value, diag.Diagnostics) {
+func flattenList(ctx context.Context, t basetypes.ListTypable, data any, opt Option) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
@@ -538,7 +385,7 @@ func flattenList(ctx context.Context, t basetypes.ListTypable, data any, cfg *co
 	et := any(t).(attr.TypeWithElementType).ElementType()
 	elems := make([]attr.Value, 0, len(s))
 	for _, raw := range s {
-		child, d := flatten(ctx, et, raw, cfg)
+		child, d := flatten(ctx, et, raw, opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -555,7 +402,7 @@ func flattenList(ctx context.Context, t basetypes.ListTypable, data any, cfg *co
 	return v, diags
 }
 
-func flattenTuple(ctx context.Context, t basetypes.TupleType, data any, cfg *config) (attr.Value, diag.Diagnostics) {
+func flattenTuple(ctx context.Context, t basetypes.TupleType, data any, opt Option) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
@@ -568,7 +415,7 @@ func flattenTuple(ctx context.Context, t basetypes.TupleType, data any, cfg *con
 	}
 	elems := make([]attr.Value, len(s))
 	for i, raw := range s {
-		child, d := flatten(ctx, t.ElemTypes[i], raw, cfg)
+		child, d := flatten(ctx, t.ElemTypes[i], raw, opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags

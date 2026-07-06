@@ -13,73 +13,6 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// Naming convention helpers
-// -----------------------------------------------------------------------------
-
-func TestSnakeToCamel(t *testing.T) {
-	t.Parallel()
-	tests := map[string]string{
-		"":                 "",
-		"id":               "id",
-		"some_field":       "someField",
-		"some_field_name":  "someFieldName",
-		"a_b_c":            "aBC",
-		"http_url":         "httpUrl",
-		"trailing_":        "trailing_",
-		"_leading":         "_leading",
-		"already_snake_ok": "alreadySnakeOk",
-	}
-	for in, want := range tests {
-		if got := SnakeToCamel(in); got != want {
-			t.Errorf("SnakeToCamel(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestCamelToSnake(t *testing.T) {
-	t.Parallel()
-	tests := map[string]string{
-		"":            "",
-		"id":          "id",
-		"someField":   "some_field",
-		"SomeField":   "some_field",
-		"HTTPServer":  "http_server",
-		"URL":         "url",
-		"userID":      "user_id",
-		"parseXMLDoc": "parse_xml_doc",
-		"a2b":         "a2b",
-	}
-	for in, want := range tests {
-		if got := CamelToSnake(in); got != want {
-			t.Errorf("CamelToSnake(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestSnakeCamelMapper_Overrides(t *testing.T) {
-	t.Parallel()
-	m := &SnakeCamelMapper{Overrides: map[string]string{
-		"id":         "ID",           // acronym exception
-		"custom_key": "totally_diff", // arbitrary mapping
-	}}
-	if got := m.ToAPI("id"); got != "ID" {
-		t.Errorf("ToAPI id = %q", got)
-	}
-	if got := m.ToAPI("some_field"); got != "someField" {
-		t.Errorf("ToAPI some_field = %q", got)
-	}
-	if got := m.ToTF("ID"); got != "id" {
-		t.Errorf("ToTF ID = %q", got)
-	}
-	if got := m.ToTF("someField"); got != "some_field" {
-		t.Errorf("ToTF someField = %q", got)
-	}
-	if got := m.ToTF("totally_diff"); got != "custom_key" {
-		t.Errorf("ToTF totally_diff = %q", got)
-	}
-}
-
-// -----------------------------------------------------------------------------
 // Expand with naming
 // -----------------------------------------------------------------------------
 
@@ -133,8 +66,8 @@ func TestExpand_MapKeysNotTranslated(t *testing.T) {
 	}
 	want := map[string]any{
 		"resourceTags": map[string]any{
-			"env_stage":  "prod",  // NOT translated
-			"cost_owner": "core",  // NOT translated
+			"env_stage":  "prod", // NOT translated
+			"cost_owner": "core", // NOT translated
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -426,16 +359,16 @@ func TestFlatten_Primitives(t *testing.T) {
 		data       any
 		want       attr.Value
 	}{
-		"bool":              {basetypes.BoolType{}, true, basetypes.NewBoolValue(true)},
-		"bool from string":  {basetypes.BoolType{}, "true", basetypes.NewBoolValue(true)},
-		"bool null":         {basetypes.BoolType{}, nil, basetypes.NewBoolNull()},
-		"string":            {basetypes.StringType{}, "hi", basetypes.NewStringValue("hi")},
-		"int64 from float":  {basetypes.Int64Type{}, float64(5), basetypes.NewInt64Value(5)},
-		"int64 from jsonN":  {basetypes.Int64Type{}, json.Number("5"), basetypes.NewInt64Value(5)},
-		"int32":             {basetypes.Int32Type{}, float64(7), basetypes.NewInt32Value(7)},
-		"float64":           {basetypes.Float64Type{}, 3.5, basetypes.NewFloat64Value(3.5)},
-		"float32":           {basetypes.Float32Type{}, 2.5, basetypes.NewFloat32Value(2.5)},
-		"number":            {basetypes.NumberType{}, 1.25, basetypes.NewNumberValue(big.NewFloat(1.25))},
+		"bool":             {basetypes.BoolType{}, true, basetypes.NewBoolValue(true)},
+		"bool from string": {basetypes.BoolType{}, "true", basetypes.NewBoolValue(true)},
+		"bool null":        {basetypes.BoolType{}, nil, basetypes.NewBoolNull()},
+		"string":           {basetypes.StringType{}, "hi", basetypes.NewStringValue("hi")},
+		"int64 from float": {basetypes.Int64Type{}, float64(5), basetypes.NewInt64Value(5)},
+		"int64 from jsonN": {basetypes.Int64Type{}, json.Number("5"), basetypes.NewInt64Value(5)},
+		"int32":            {basetypes.Int32Type{}, float64(7), basetypes.NewInt32Value(7)},
+		"float64":          {basetypes.Float64Type{}, 3.5, basetypes.NewFloat64Value(3.5)},
+		"float32":          {basetypes.Float32Type{}, 2.5, basetypes.NewFloat32Value(2.5)},
+		"number":           {basetypes.NumberType{}, 1.25, basetypes.NewNumberValue(big.NewFloat(1.25))},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
