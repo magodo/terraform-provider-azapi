@@ -20,7 +20,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services"
 	"github.com/Azure/terraform-provider-azapi/internal/services/functions"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
-	"github.com/Azure/terraform-provider-azapi/internal/services/network"
+	"github.com/Azure/terraform-provider-azapi/internal/typed/services/network"
 	"github.com/Azure/terraform-provider-azapi/version"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -766,7 +766,7 @@ func (p Provider) DataSources(ctx context.Context) []func() datasource.DataSourc
 func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		func() resource.Resource {
-			return &network.AzApiVirtualNetworkResource{}
+			return network.NewAzApiVirtualNetworkResource()
 		},
 		func() resource.Resource {
 			return &services.AzapiResource{}
