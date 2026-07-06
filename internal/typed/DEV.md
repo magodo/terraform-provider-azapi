@@ -45,7 +45,8 @@ Again for the "zero" value case, we regard zero value has no difference than oth
 
 By convention, ARM API uses camelCase for API properties while TF uses snake_case. When expand/flatten, we need to convert the casing along the process. In many cases, this can be automatically done. Whilst for the abbreviations, the intent might be ambiguous. E.g. in API there is an attribute called: `fooID` and `fooId`, they shall be converted to TF as `foo_id`.
 
-The plan is to keep the customization at the post-codegen phase:
+The plan is to keep the customization at the post-codegen phase while with hint generated during codegen phase: 
 
-- Override the schema to rename the TF attribute
-- Specify the expand/flatten override to include this special mapping, instead of following the default mapping logic which takes each capital case letter as a new separation. This means `fooID` -> `foo_i_d`
+- Codegen phase takes camelCase and convert it to snake_case. During the conversion it checks whether the naive conversion matches the smart conversion, if it doesn't, it generates a record in the override mapping to reflect the smart conversion as the snake_case -> camelCase is always naive.
+- Customize the override mapping if the smart version is still not correct.
+- The expand/flatten pick up the override map.
