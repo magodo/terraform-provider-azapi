@@ -1,7 +1,7 @@
 package tfconv
 
 type Option struct {
-	NameMapper SnakeCamelNameMapper
+	NameMapper NameMapper
 }
 
 func NewDefaultOption() Option {

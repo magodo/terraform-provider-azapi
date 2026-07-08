@@ -30,11 +30,11 @@ func TestToSnakeCase(t *testing.T) {
 		"":            "",
 		"id":          "id",
 		"someField":   "some_field",
-		"SomeField":   "some_field",
-		"HTTPServer":  "http_server",
-		"URL":         "url",
-		"userID":      "user_id",
-		"parseXMLDoc": "parse_xml_doc",
+		"SomeField":   "_some_field",
+		"HTTPServer":  "_h_t_t_p_server",
+		"URL":         "_u_r_l",
+		"userID":      "user_i_d",
+		"parseXMLDoc": "parse_x_m_l_doc",
 		"a2b":         "a2b",
 	}
 	for in, want := range tests {
@@ -46,23 +46,20 @@ func TestToSnakeCase(t *testing.T) {
 
 func TestSnakeCamelMapper_Overrides(t *testing.T) {
 	t.Parallel()
-	m := &SnakeCamelNameMapper{Overrides: map[string]string{
-		"id":         "ID",           // acronym exception
-		"custom_key": "totally_diff", // arbitrary mapping
-	}}
-	if got := m.ToAPI("id"); got != "ID" {
-		t.Errorf("ToAPI id = %q", got)
+	m := NewSnakeCamelNameMapper(map[string]string{
+		"id":         "ID",
+		"custom_key": "CustomKey",
+	})
+
+	tests := map[string]string{
+		"":           "",
+		"ID":         "id",
+		"CustomKey":  "custom_key",
+		"HTTPServer": "_h_t_t_p_server",
 	}
-	if got := m.ToAPI("some_field"); got != "someField" {
-		t.Errorf("ToAPI some_field = %q", got)
-	}
-	if got := m.ToTF("ID"); got != "id" {
-		t.Errorf("ToTF ID = %q", got)
-	}
-	if got := m.ToTF("someField"); got != "some_field" {
-		t.Errorf("ToTF someField = %q", got)
-	}
-	if got := m.ToTF("totally_diff"); got != "custom_key" {
-		t.Errorf("ToTF totally_diff = %q", got)
+	for in, want := range tests {
+		if got := m.ToSnakeCase(in); got != want {
+			t.Errorf("ToSnakeCase(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

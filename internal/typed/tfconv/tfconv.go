@@ -1,24 +1,15 @@
 // Package tfconv provides schema-driven expand/flatten helpers that bridge
 // terraform-plugin-framework attr.Value trees with untyped Go values
 // (map[string]any / []any) — the shape most REST/JSON API clients speak.
-//
-// Terraform schema attributes are snake_case by convention; JSON APIs
-// typically use camelCase. tfconv translates Object attribute keys through
-// a pluggable NameMapper (default: SnakeCamelMapper). Map keys and
-// DynamicType-inferred object keys are NEVER translated — those are user
-// data, not schema names.
 package tfconv
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/big"
-	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
@@ -28,10 +19,11 @@ import (
 // -----------------------------------------------------------------------------
 
 // Expand converts a framework attr.Value tree into an untyped Go value
-// suitable for JSON marshalling / SDK bodies. Null and unknown values become
-// nil. Object attribute keys are translated through the supplied NameMapper
-// (default: identity). Map values and Dynamic-inferred object keys are
-// NEVER translated.
+// suitable for JSON marshalling / SDK bodies.
+//
+// Note: Null and unknown values become nil atm.
+// Note: Object attribute keys are translated through the supplied NameMapper, while Map
+// values and Dynamic-inferred object keys are NEVER translated.
 func Expand(ctx context.Context, v attr.Value, opt *Option) (any, diag.Diagnostics) {
 	if opt == nil {
 		opt = new(NewDefaultOption())
@@ -53,7 +45,8 @@ func expand(ctx context.Context, v attr.Value, opt Option) (any, diag.Diagnostic
 			return nil, diags
 		}
 		// Underlying is user data — bypass name translation.
-		return expandUntranslated(ctx, dv.UnderlyingValue(), opt)
+		newOpt := Option{NameMapper: NoopNameMapper{}}
+		return expand(ctx, dv.UnderlyingValue(), newOpt)
 	case basetypes.BoolValuable:
 		bv, d := tv.ToBoolValue(ctx)
 		diags.Append(d...)
@@ -141,14 +134,6 @@ func expand(ctx context.Context, v attr.Value, opt Option) (any, diag.Diagnostic
 	return nil, diags
 }
 
-// expandUntranslated forces the sub-tree to skip name translation. Used for
-// Dynamic underlying values (which have no schema).
-func expandUntranslated(ctx context.Context, v attr.Value, opt Option) (any, diag.Diagnostics) {
-	sub := &config{mapper: identityMapper{}}
-	_ = opt // preserved for future use if we need path-scoped mapping
-	return expand(ctx, v, sub)
-}
-
 func expandSlice(ctx context.Context, elems []attr.Value, opt Option) ([]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	out := make([]any, 0, len(elems))
@@ -164,7 +149,7 @@ func expandSlice(ctx context.Context, elems []attr.Value, opt Option) ([]any, di
 }
 
 // expandStringMap writes children into a map. When translate is true, keys
-// are passed through cfg.mapper.ToAPI; otherwise they're used verbatim.
+// are passed through NameMapper; otherwise they're used verbatim.
 func expandStringMap(ctx context.Context, elems map[string]attr.Value, opt Option, translate bool) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	out := make(map[string]any, len(elems))
@@ -189,8 +174,8 @@ func expandStringMap(ctx context.Context, elems map[string]attr.Value, opt Optio
 
 // Flatten converts an untyped Go value into a framework attr.Value matching
 // targetType. Object attribute keys in `data` are looked up by translating
-// the schema (TF) name through the NameMapper's ToAPI. Map values and
-// DynamicType-inferred object keys are used verbatim.
+// the schema (TF) name through the NameMapper. Map values and DynamicType-inferred
+// object keys are used verbatim.
 func Flatten(ctx context.Context, targetType attr.Type, data any, opt *Option) (attr.Value, diag.Diagnostics) {
 	if opt == nil {
 		opt = new(NewDefaultOption())
@@ -215,64 +200,61 @@ func flatten(ctx context.Context, targetType attr.Type, data any, opt Option) (a
 		diags.Append(d...)
 		return v, diags
 	case basetypes.BoolTypable:
-		b, err := coerceBool(data)
-		if err != nil {
-			return nil, coerceErr("bool", data, err)
+		v, ok := data.(bool)
+		if !ok {
+			return nil, typeCastError("bool", data)
 		}
-		v, d := t.ValueFromBool(ctx, basetypes.NewBoolValue(b))
+		tv, d := t.ValueFromBool(ctx, basetypes.NewBoolValue(v))
 		diags.Append(d...)
-		return v, diags
+		return tv, diags
 	case basetypes.StringTypable:
-		s, err := coerceString(data)
-		if err != nil {
-			return nil, coerceErr("string", data, err)
+		v, ok := data.(string)
+		if !ok {
+			return nil, typeCastError("string", data)
 		}
-		v, d := t.ValueFromString(ctx, basetypes.NewStringValue(s))
+		tv, d := t.ValueFromString(ctx, basetypes.NewStringValue(v))
 		diags.Append(d...)
-		return v, diags
+		return tv, diags
 	case basetypes.Int64Typable:
-		i, err := coerceInt64(data)
-		if err != nil {
-			return nil, coerceErr("int64", data, err)
+		v, ok := data.(float64)
+		if !ok {
+			return nil, typeCastError("float64", data)
 		}
-		v, d := t.ValueFromInt64(ctx, basetypes.NewInt64Value(i))
+		tv, d := t.ValueFromInt64(ctx, basetypes.NewInt64Value(int64(v)))
 		diags.Append(d...)
-		return v, diags
+		return tv, diags
 	case basetypes.Int32Typable:
-		i, err := coerceInt64(data)
-		if err != nil {
-			return nil, coerceErr("int32", data, err)
+		v, ok := data.(float64)
+		if !ok {
+			return nil, typeCastError("float64", data)
 		}
-		if i > (1<<31)-1 || i < -(1<<31) {
-			return nil, coerceErr("int32", data, fmt.Errorf("value %d overflows int32", i))
-		}
-		v, d := t.ValueFromInt32(ctx, basetypes.NewInt32Value(int32(i)))
+		tv, d := t.ValueFromInt32(ctx, basetypes.NewInt32Value(int32(v)))
 		diags.Append(d...)
-		return v, diags
+		return tv, diags
 	case basetypes.Float64Typable:
-		f, err := coerceFloat64(data)
-		if err != nil {
-			return nil, coerceErr("float64", data, err)
+		v, ok := data.(float64)
+		if !ok {
+			return nil, typeCastError("float64", data)
 		}
-		v, d := t.ValueFromFloat64(ctx, basetypes.NewFloat64Value(f))
+		tv, d := t.ValueFromFloat64(ctx, basetypes.NewFloat64Value(v))
 		diags.Append(d...)
-		return v, diags
+		return tv, diags
 	case basetypes.Float32Typable:
-		f, err := coerceFloat64(data)
-		if err != nil {
-			return nil, coerceErr("float32", data, err)
+		v, ok := data.(float64)
+		if !ok {
+			return nil, typeCastError("float64", data)
 		}
-		v, d := t.ValueFromFloat32(ctx, basetypes.NewFloat32Value(float32(f)))
+		tv, d := t.ValueFromFloat32(ctx, basetypes.NewFloat32Value(float32(v)))
 		diags.Append(d...)
-		return v, diags
+		return tv, diags
 	case basetypes.NumberTypable:
-		bf, err := coerceBigFloat(data)
-		if err != nil {
-			return nil, coerceErr("number", data, err)
+		v, ok := data.(float64)
+		if !ok {
+			return nil, typeCastError("float64", data)
 		}
-		v, d := t.ValueFromNumber(ctx, basetypes.NewNumberValue(bf))
+		tv, d := t.ValueFromNumber(ctx, basetypes.NewNumberValue(big.NewFloat(v)))
 		diags.Append(d...)
-		return v, diags
+		return tv, diags
 	case basetypes.ObjectTypable:
 		return flattenObject(ctx, t, data, opt)
 	case basetypes.MapTypable:
@@ -294,9 +276,9 @@ func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, opt
 	var diags diag.Diagnostics
 	m, ok := data.(map[string]any)
 	if !ok {
-		return nil, coerceErr("object", data, fmt.Errorf("expected map[string]any"))
+		return nil, typeCastError("map[string]any", data)
 	}
-	withAttrs, ok := any(t).(attr.TypeWithAttributeTypes)
+	withAttrs, ok := t.(attr.TypeWithAttributeTypes)
 	if !ok {
 		diags.AddError("Unsupported ObjectTypable",
 			fmt.Sprintf("%T does not implement attr.TypeWithAttributeTypes", t))
@@ -304,14 +286,14 @@ func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, opt
 	}
 	attrTypes := withAttrs.AttributeTypes()
 	attrs := make(map[string]attr.Value, len(attrTypes))
-	for tfName, at := range attrTypes {
-		apiName := opt.NameMapper.ToCamelCase(tfName)
-		child, d := flatten(ctx, at, m[apiName], opt)
+	for attrName, attrType := range attrTypes {
+		apiName := opt.NameMapper.ToCamelCase(attrName)
+		child, d := flatten(ctx, attrType, m[apiName], opt)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
-		attrs[tfName] = child
+		attrs[attrName] = child
 	}
 	obj, d := basetypes.NewObjectValue(attrTypes, attrs)
 	diags.Append(d...)
@@ -327,12 +309,19 @@ func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, opt Optio
 	var diags diag.Diagnostics
 	m, ok := data.(map[string]any)
 	if !ok {
-		return nil, coerceErr("map", data, fmt.Errorf("expected map[string]any"))
+		return nil, typeCastError("map[string]any", data)
 	}
-	et := any(t).(attr.TypeWithElementType).ElementType()
+
+	withElements, ok := t.(attr.TypeWithElementType)
+	if !ok {
+		diags.AddError("Unsupported MapTypable",
+			fmt.Sprintf("%T does not implement attr.TypeWithElementType", t))
+		return nil, diags
+	}
+	et := withElements.ElementType()
+
 	elems := make(map[string]attr.Value, len(m))
 	for k, raw := range m {
-		// Map keys are user data — not translated.
 		child, d := flatten(ctx, et, raw, opt)
 		diags.Append(d...)
 		if diags.HasError() {
@@ -354,9 +343,17 @@ func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, opt Optio
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
-		return nil, coerceErr("set", data, fmt.Errorf("expected []any"))
+		return nil, typeCastError("[]any", data)
 	}
-	et := any(t).(attr.TypeWithElementType).ElementType()
+
+	withElements, ok := t.(attr.TypeWithElementType)
+	if !ok {
+		diags.AddError("Unsupported SetTypable",
+			fmt.Sprintf("%T does not implement attr.TypeWithElementType", t))
+		return nil, diags
+	}
+	et := withElements.ElementType()
+
 	elems := make([]attr.Value, 0, len(s))
 	for _, raw := range s {
 		child, d := flatten(ctx, et, raw, opt)
@@ -380,9 +377,15 @@ func flattenList(ctx context.Context, t basetypes.ListTypable, data any, opt Opt
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
-		return nil, coerceErr("list", data, fmt.Errorf("expected []any"))
+		return nil, typeCastError("[]any", data)
 	}
-	et := any(t).(attr.TypeWithElementType).ElementType()
+	withElements, ok := t.(attr.TypeWithElementType)
+	if !ok {
+		diags.AddError("Unsupported ListTypable",
+			fmt.Sprintf("%T does not implement attr.TypeWithElementType", t))
+		return nil, diags
+	}
+	et := withElements.ElementType()
 	elems := make([]attr.Value, 0, len(s))
 	for _, raw := range s {
 		child, d := flatten(ctx, et, raw, opt)
@@ -406,7 +409,7 @@ func flattenTuple(ctx context.Context, t basetypes.TupleType, data any, opt Opti
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
-		return nil, coerceErr("tuple", data, fmt.Errorf("expected []any"))
+		return nil, typeCastError("[]any", data)
 	}
 	if len(s) != len(t.ElemTypes) {
 		diags.AddError("Tuple arity mismatch",
@@ -440,31 +443,8 @@ func inferDynamic(ctx context.Context, data any) (attr.Value, diag.Diagnostics) 
 		return basetypes.NewBoolValue(v), diags
 	case string:
 		return basetypes.NewStringValue(v), diags
-	case int:
-		return basetypes.NewInt64Value(int64(v)), diags
-	case int32:
-		return basetypes.NewInt32Value(v), diags
-	case int64:
-		return basetypes.NewInt64Value(v), diags
-	case float32:
-		return basetypes.NewFloat32Value(v), diags
 	case float64:
 		return basetypes.NewFloat64Value(v), diags
-	case *big.Float:
-		return basetypes.NewNumberValue(v), diags
-	case json.Number:
-		if i, err := v.Int64(); err == nil {
-			return basetypes.NewInt64Value(i), diags
-		}
-		if f, err := v.Float64(); err == nil {
-			return basetypes.NewFloat64Value(f), diags
-		}
-		bf, _, err := big.ParseFloat(string(v), 10, 512, big.ToNearestEven)
-		if err != nil {
-			diags.AddError("Invalid number", err.Error())
-			return nil, diags
-		}
-		return basetypes.NewNumberValue(bf), diags
 	case []any:
 		elems := make([]attr.Value, len(v))
 		types := make([]attr.Type, len(v))
@@ -501,109 +481,13 @@ func inferDynamic(ctx context.Context, data any) (attr.Value, diag.Diagnostics) 
 	return nil, diags
 }
 
-// -----------------------------------------------------------------------------
-// Scalar coercion helpers
-// -----------------------------------------------------------------------------
-
-func coerceBool(v any) (bool, error) {
-	switch x := v.(type) {
-	case bool:
-		return x, nil
-	case string:
-		return strconv.ParseBool(x)
-	}
-	return false, fmt.Errorf("cannot convert %T to bool", v)
-}
-func coerceString(v any) (string, error) {
-	switch x := v.(type) {
-	case string:
-		return x, nil
-	case fmt.Stringer:
-		return x.String(), nil
-	case []byte:
-		return string(x), nil
-	}
-	return "", fmt.Errorf("cannot convert %T to string", v)
-}
-func coerceInt64(v any) (int64, error) {
-	switch x := v.(type) {
-	case int:
-		return int64(x), nil
-	case int8:
-		return int64(x), nil
-	case int16:
-		return int64(x), nil
-	case int32:
-		return int64(x), nil
-	case int64:
-		return x, nil
-	case uint:
-		return int64(x), nil
-	case uint8:
-		return int64(x), nil
-	case uint16:
-		return int64(x), nil
-	case uint32:
-		return int64(x), nil
-	case uint64:
-		if x > (1<<63)-1 {
-			return 0, fmt.Errorf("uint64 %d overflows int64", x)
-		}
-		return int64(x), nil
-	case float32:
-		return int64(x), nil
-	case float64:
-		return int64(x), nil
-	case json.Number:
-		return x.Int64()
-	case string:
-		return strconv.ParseInt(x, 10, 64)
-	}
-	return 0, fmt.Errorf("cannot convert %T to int64", v)
-}
-func coerceFloat64(v any) (float64, error) {
-	switch x := v.(type) {
-	case float32:
-		return float64(x), nil
-	case float64:
-		return x, nil
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		i, _ := coerceInt64(x)
-		return float64(i), nil
-	case json.Number:
-		return x.Float64()
-	case string:
-		return strconv.ParseFloat(x, 64)
-	}
-	return 0, fmt.Errorf("cannot convert %T to float64", v)
-}
-func coerceBigFloat(v any) (*big.Float, error) {
-	switch x := v.(type) {
-	case *big.Float:
-		return x, nil
-	case big.Float:
-		return &x, nil
-	case json.Number:
-		bf, _, err := big.ParseFloat(string(x), 10, 512, big.ToNearestEven)
-		return bf, err
-	case string:
-		bf, _, err := big.ParseFloat(x, 10, 512, big.ToNearestEven)
-		return bf, err
-	}
-	if f, err := coerceFloat64(v); err == nil {
-		return big.NewFloat(f), nil
-	}
-	if i, err := coerceInt64(v); err == nil {
-		return new(big.Float).SetInt64(i), nil
-	}
-	return nil, fmt.Errorf("cannot convert %T to *big.Float", v)
-}
-func coerceErr(kind string, data any, err error) diag.Diagnostics {
+func typeCastError(expect string, actual any) diag.Diagnostics {
 	var d diag.Diagnostics
 	d.AddError("tfconv.Flatten type mismatch",
-		fmt.Sprintf("cannot coerce Go %T into framework %s: %s", data, kind, err))
+		fmt.Sprintf("expect=%s get=%T", expect, actual))
 	return d
 }
+
 func nullValue(ctx context.Context, t attr.Type) (attr.Value, diag.Diagnostics) {
 	var d diag.Diagnostics
 	v, err := t.ValueFromTerraform(ctx, tftypes.NewValue(t.TerraformType(ctx), nil))
@@ -636,16 +520,4 @@ func ObjectFromRaw(ctx context.Context, schemaType attr.Type, raw tftypes.Value)
 	ov, d := valuable.ToObjectValue(ctx)
 	diags.Append(d...)
 	return ov, diags
-}
-
-// SetObjectIntoState writes an ObjectValue back into a State's Raw.
-func SetObjectIntoState(ctx context.Context, state *tfsdk.State, obj basetypes.ObjectValue) diag.Diagnostics {
-	var diags diag.Diagnostics
-	raw, err := obj.ToTerraformValue(ctx)
-	if err != nil {
-		diags.AddError("tfconv.SetObjectIntoState", err.Error())
-		return diags
-	}
-	state.Raw = raw
-	return diags
 }

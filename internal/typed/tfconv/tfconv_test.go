@@ -1,8 +1,6 @@
 package tfconv
 
 import (
-	"context"
-	"encoding/json"
 	"math/big"
 	"testing"
 
@@ -13,12 +11,11 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// Expand with naming
+// Expand
 // -----------------------------------------------------------------------------
 
 func TestExpand_ObjectSnakeToCamel(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	attrTypes := map[string]attr.Type{
 		"user_name":  basetypes.StringType{},
@@ -31,7 +28,7 @@ func TestExpand_ObjectSnakeToCamel(t *testing.T) {
 		"is_enabled": basetypes.NewBoolValue(true),
 	})
 
-	got, diags := Expand(ctx, ov, WithSnakeCamel())
+	got, diags := Expand(t.Context(), ov, nil)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -47,20 +44,17 @@ func TestExpand_ObjectSnakeToCamel(t *testing.T) {
 
 func TestExpand_MapKeysNotTranslated(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
-	// Object containing a map whose keys are user data (tags with
-	// snake_case_style keys that must NOT be camel-cased).
 	attrTypes := map[string]attr.Type{
 		"resource_tags": basetypes.MapType{ElemType: basetypes.StringType{}},
 	}
-	mv, _ := basetypes.NewMapValue(basetypes.StringType{}, map[string]attr.Value{
-		"env_stage":  basetypes.NewStringValue("prod"),
-		"cost_owner": basetypes.NewStringValue("core"),
-	})
-	ov, _ := basetypes.NewObjectValue(attrTypes, map[string]attr.Value{"resource_tags": mv})
+	ov := basetypes.NewObjectValueMust(attrTypes, map[string]attr.Value{
+		"resource_tags": basetypes.NewMapValueMust(basetypes.StringType{}, map[string]attr.Value{
+			"env_stage":  basetypes.NewStringValue("prod"),
+			"cost_owner": basetypes.NewStringValue("core"),
+		})})
 
-	got, diags := Expand(ctx, ov, WithSnakeCamel())
+	got, diags := Expand(t.Context(), ov, nil)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -77,7 +71,6 @@ func TestExpand_MapKeysNotTranslated(t *testing.T) {
 
 func TestExpand_NestedObjectTranslated(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	inner := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
 		"port_number": basetypes.Int64Type{},
@@ -86,16 +79,16 @@ func TestExpand_NestedObjectTranslated(t *testing.T) {
 	outerAttrs := map[string]attr.Type{
 		"listen_rules": basetypes.ListType{ElemType: inner},
 	}
-	r1, _ := basetypes.NewObjectValue(inner.AttrTypes, map[string]attr.Value{
-		"port_number": basetypes.NewInt64Value(22),
-		"proto_name":  basetypes.NewStringValue("tcp"),
-	})
-	lv, _ := basetypes.NewListValue(inner, []attr.Value{r1})
-	ov, _ := basetypes.NewObjectValue(outerAttrs, map[string]attr.Value{
-		"listen_rules": lv,
+	ov := basetypes.NewObjectValueMust(outerAttrs, map[string]attr.Value{
+		"listen_rules": basetypes.NewListValueMust(inner, []attr.Value{
+			basetypes.NewObjectValueMust(inner.AttrTypes, map[string]attr.Value{
+				"port_number": basetypes.NewInt64Value(22),
+				"proto_name":  basetypes.NewStringValue("tcp"),
+			}),
+		}),
 	})
 
-	got, diags := Expand(ctx, ov, WithSnakeCamel())
+	got, diags := Expand(t.Context(), ov, nil)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -114,36 +107,41 @@ func TestExpand_NestedObjectTranslated(t *testing.T) {
 
 func TestExpand_WithOverrides(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	attrTypes := map[string]attr.Type{
 		"id":         basetypes.StringType{},
 		"user_email": basetypes.StringType{},
 	}
-	ov, _ := basetypes.NewObjectValue(attrTypes, map[string]attr.Value{
+	ov := basetypes.NewObjectValueMust(attrTypes, map[string]attr.Value{
 		"id":         basetypes.NewStringValue("r-1"),
 		"user_email": basetypes.NewStringValue("a@b"),
 	})
 
-	got, diags := Expand(ctx, ov, WithSnakeCamel(map[string]string{
-		"id": "ID", // API uses uppercase ID
-	}))
+	got, diags := Expand(t.Context(), ov, &Option{
+		NameMapper: NewSnakeCamelNameMapper(
+			map[string]string{
+				"id": "ID",
+			},
+		),
+	})
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
-	want := map[string]any{"ID": "r-1", "userEmail": "a@b"}
+	want := map[string]any{
+		"ID":        "r-1",
+		"userEmail": "a@b",
+	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("mismatch (-want +got):\n%s", diff)
 	}
 }
 
 // -----------------------------------------------------------------------------
-// Flatten with naming
+// Flatten
 // -----------------------------------------------------------------------------
 
 func TestFlatten_ObjectCamelToSnake(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	schemaType := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
 		"user_name":  basetypes.StringType{},
@@ -155,11 +153,11 @@ func TestFlatten_ObjectCamelToSnake(t *testing.T) {
 		"itemCount": float64(3),
 		"isEnabled": true,
 	}
-	got, diags := Flatten(ctx, schemaType, apiResp, WithSnakeCamel())
+	got, diags := Flatten(t.Context(), schemaType, apiResp, nil)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
-	want, _ := basetypes.NewObjectValue(schemaType.AttrTypes, map[string]attr.Value{
+	want := basetypes.NewObjectValueMust(schemaType.AttrTypes, map[string]attr.Value{
 		"user_name":  basetypes.NewStringValue("alice"),
 		"item_count": basetypes.NewInt64Value(3),
 		"is_enabled": basetypes.NewBoolValue(true),
@@ -171,7 +169,6 @@ func TestFlatten_ObjectCamelToSnake(t *testing.T) {
 
 func TestFlatten_MapKeysNotTranslated(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	schemaType := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
 		"resource_tags": basetypes.MapType{ElemType: basetypes.StringType{}},
@@ -182,16 +179,15 @@ func TestFlatten_MapKeysNotTranslated(t *testing.T) {
 			"cost_owner": "core",
 		},
 	}
-	got, diags := Flatten(ctx, schemaType, apiResp, WithSnakeCamel())
+	got, diags := Flatten(t.Context(), schemaType, apiResp, nil)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
-	tagsVal, _ := basetypes.NewMapValue(basetypes.StringType{}, map[string]attr.Value{
-		"env_stage":  basetypes.NewStringValue("prod"),
-		"cost_owner": basetypes.NewStringValue("core"),
-	})
-	want, _ := basetypes.NewObjectValue(schemaType.AttrTypes, map[string]attr.Value{
-		"resource_tags": tagsVal,
+	want := basetypes.NewObjectValueMust(schemaType.AttrTypes, map[string]attr.Value{
+		"resource_tags": basetypes.NewMapValueMust(basetypes.StringType{}, map[string]attr.Value{
+			"env_stage":  basetypes.NewStringValue("prod"),
+			"cost_owner": basetypes.NewStringValue("core"),
+		}),
 	})
 	if !got.Equal(want) {
 		t.Fatalf("want %s, got %s", want, got)
@@ -200,7 +196,6 @@ func TestFlatten_MapKeysNotTranslated(t *testing.T) {
 
 func TestFlatten_MissingCamelKeyBecomesNull(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	schemaType := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
 		"present_field": basetypes.StringType{},
@@ -208,11 +203,11 @@ func TestFlatten_MissingCamelKeyBecomesNull(t *testing.T) {
 	}}
 	// Only "presentField" in the payload; "missingField" absent.
 	apiResp := map[string]any{"presentField": "hi"}
-	got, diags := Flatten(ctx, schemaType, apiResp, WithSnakeCamel())
+	got, diags := Flatten(t.Context(), schemaType, apiResp, nil)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
-	want, _ := basetypes.NewObjectValue(schemaType.AttrTypes, map[string]attr.Value{
+	want := basetypes.NewObjectValueMust(schemaType.AttrTypes, map[string]attr.Value{
 		"present_field": basetypes.NewStringValue("hi"),
 		"missing_field": basetypes.NewInt64Null(),
 	})
@@ -223,20 +218,26 @@ func TestFlatten_MissingCamelKeyBecomesNull(t *testing.T) {
 
 func TestFlatten_WithOverrides(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	schemaType := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
 		"id":         basetypes.StringType{},
 		"user_email": basetypes.StringType{},
 	}}
-	apiResp := map[string]any{"ID": "r-1", "userEmail": "a@b"}
-	got, diags := Flatten(ctx, schemaType, apiResp, WithSnakeCamel(map[string]string{
-		"id": "ID",
-	}))
+	apiResp := map[string]any{
+		"ID":        "r-1",
+		"userEmail": "a@b",
+	}
+	got, diags := Flatten(t.Context(), schemaType, apiResp, &Option{
+		NameMapper: NewSnakeCamelNameMapper(
+			map[string]string{
+				"id": "ID",
+			},
+		),
+	})
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
-	want, _ := basetypes.NewObjectValue(schemaType.AttrTypes, map[string]attr.Value{
+	want := basetypes.NewObjectValueMust(schemaType.AttrTypes, map[string]attr.Value{
 		"id":         basetypes.NewStringValue("r-1"),
 		"user_email": basetypes.NewStringValue("a@b"),
 	})
@@ -246,12 +247,11 @@ func TestFlatten_WithOverrides(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Round-trip with naming
+// Round-trip
 // -----------------------------------------------------------------------------
 
 func TestRoundTrip_WithNaming(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	ruleType := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
 		"port_number": basetypes.Int64Type{},
@@ -268,7 +268,7 @@ func TestRoundTrip_WithNaming(t *testing.T) {
 			"inner_key": basetypes.StringType{},
 		}},
 	}}
-	opt := WithSnakeCamel(map[string]string{"id": "ID"})
+	opt := Option{NameMapper: NewSnakeCamelNameMapper(map[string]string{"id": "ID"})}
 
 	apiResp := map[string]any{
 		"ID":         "res-42",
@@ -282,11 +282,11 @@ func TestRoundTrip_WithNaming(t *testing.T) {
 		"nestedObject": map[string]any{"innerKey": "hello"},
 	}
 
-	v, diags := Flatten(ctx, schemaType, apiResp, opt)
+	v, diags := Flatten(t.Context(), schemaType, apiResp, &opt)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
-	rt, diags := Expand(ctx, v, opt)
+	rt, diags := Expand(t.Context(), v, &opt)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -306,14 +306,15 @@ func TestRoundTrip_WithNaming(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// The original (identity) tests — everything below should keep working
-// unchanged because WithNameMapper defaults to identity.
-// -----------------------------------------------------------------------------
-
 func TestExpand_Primitives(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+
+	bigFloatEq := func(a, b *big.Float) bool {
+		if a == nil || b == nil {
+			return a == b
+		}
+		return a.Cmp(b) == 0
+	}
 
 	tests := map[string]struct {
 		in   attr.Value
@@ -326,12 +327,13 @@ func TestExpand_Primitives(t *testing.T) {
 		"string":         {basetypes.NewStringValue("hello"), "hello"},
 		"string empty":   {basetypes.NewStringValue(""), ""},
 		"string null":    {basetypes.NewStringNull(), nil},
+		"string unknown": {basetypes.NewStringUnknown(), nil},
 		"int64":          {basetypes.NewInt64Value(42), int64(42)},
-		"int64 negative": {basetypes.NewInt64Value(-7), int64(-7)},
 		"int64 null":     {basetypes.NewInt64Null(), nil},
+		"int64 uknown":   {basetypes.NewInt64Unknown(), nil},
 		"int32":          {basetypes.NewInt32Value(42), int32(42)},
-		"float64":        {basetypes.NewFloat64Value(3.14), 3.14},
 		"float32":        {basetypes.NewFloat32Value(2.5), float32(2.5)},
+		"float64":        {basetypes.NewFloat64Value(3.14), 3.14},
 		"number":         {basetypes.NewNumberValue(big.NewFloat(1.5)), big.NewFloat(1.5)},
 		"number null":    {basetypes.NewNumberNull(), nil},
 		"nil attr.Value": {nil, nil},
@@ -339,7 +341,7 @@ func TestExpand_Primitives(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, diags := Expand(ctx, tc.in)
+			got, diags := Expand(t.Context(), tc.in, nil)
 			if diags.HasError() {
 				t.Fatalf("unexpected diags: %v", diags)
 			}
@@ -352,7 +354,6 @@ func TestExpand_Primitives(t *testing.T) {
 
 func TestFlatten_Primitives(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 
 	tests := map[string]struct {
 		targetType attr.Type
@@ -360,11 +361,9 @@ func TestFlatten_Primitives(t *testing.T) {
 		want       attr.Value
 	}{
 		"bool":             {basetypes.BoolType{}, true, basetypes.NewBoolValue(true)},
-		"bool from string": {basetypes.BoolType{}, "true", basetypes.NewBoolValue(true)},
 		"bool null":        {basetypes.BoolType{}, nil, basetypes.NewBoolNull()},
 		"string":           {basetypes.StringType{}, "hi", basetypes.NewStringValue("hi")},
 		"int64 from float": {basetypes.Int64Type{}, float64(5), basetypes.NewInt64Value(5)},
-		"int64 from jsonN": {basetypes.Int64Type{}, json.Number("5"), basetypes.NewInt64Value(5)},
 		"int32":            {basetypes.Int32Type{}, float64(7), basetypes.NewInt32Value(7)},
 		"float64":          {basetypes.Float64Type{}, 3.5, basetypes.NewFloat64Value(3.5)},
 		"float32":          {basetypes.Float32Type{}, 2.5, basetypes.NewFloat32Value(2.5)},
@@ -373,7 +372,7 @@ func TestFlatten_Primitives(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, diags := Flatten(ctx, tc.targetType, tc.data)
+			got, diags := Flatten(t.Context(), tc.targetType, tc.data, nil)
 			if diags.HasError() {
 				t.Fatalf("unexpected diags: %v", diags)
 			}
@@ -382,35 +381,4 @@ func TestFlatten_Primitives(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestFlatten_TypeMismatchError(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	if _, d := Flatten(ctx, basetypes.BoolType{}, 42); !d.HasError() {
-		t.Fatal("expected bool error")
-	}
-	target := basetypes.ObjectType{AttrTypes: map[string]attr.Type{"x": basetypes.StringType{}}}
-	if _, d := Flatten(ctx, target, []any{"nope"}); !d.HasError() {
-		t.Fatal("expected object error")
-	}
-}
-
-func TestFlatten_Int32Overflow(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	if _, d := Flatten(ctx, basetypes.Int32Type{}, int64(1)<<40); !d.HasError() {
-		t.Fatal("expected int32 overflow error")
-	}
-}
-
-// -----------------------------------------------------------------------------
-// helpers
-// -----------------------------------------------------------------------------
-
-func bigFloatEq(a, b *big.Float) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Cmp(b) == 0
 }

@@ -112,7 +112,7 @@ func (r *AzApiVirtualNetworkResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
-	apiReqAny, diags := tfconv.Expand(ctx, plan, tfconv.WithSnakeCamel())
+	apiReqAny, diags := tfconv.Expand(ctx, plan, nil)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -132,7 +132,7 @@ func (r *AzApiVirtualNetworkResource) Create(ctx context.Context, req resource.C
 	respBody["parentId"] = parentId
 	respBody["name"] = name
 
-	stateObj, diags := tfconv.Flatten(ctx, r.schema.Type(), respBody, tfconv.WithSnakeCamel())
+	stateObj, diags := tfconv.Flatten(ctx, r.schema.Type(), respBody, nil)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -162,6 +162,11 @@ func (r *AzApiVirtualNetworkResource) Read(ctx context.Context, req resource.Rea
 
 	apiRespAny, err := r.ProviderData.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.DefaultRequestOptions())
 	if err != nil {
+		if utils.ResponseErrorWasNotFound(err) {
+			tflog.Info(ctx, fmt.Sprintf("%s is not found", id.ID()))
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("failed to read", err.Error())
 		return
 	}
@@ -170,7 +175,7 @@ func (r *AzApiVirtualNetworkResource) Read(ctx context.Context, req resource.Rea
 	respBody["parentId"] = parentId
 	respBody["name"] = name
 
-	stateObj, diags := tfconv.Flatten(ctx, r.schema.Type(), respBody, tfconv.WithSnakeCamel())
+	stateObj, diags := tfconv.Flatten(ctx, r.schema.Type(), respBody, nil)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -198,7 +203,7 @@ func (r *AzApiVirtualNetworkResource) Update(ctx context.Context, req resource.U
 		return
 	}
 
-	apiReqAny, diags := tfconv.Expand(ctx, plan, tfconv.WithSnakeCamel())
+	apiReqAny, diags := tfconv.Expand(ctx, plan, nil)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -218,7 +223,7 @@ func (r *AzApiVirtualNetworkResource) Update(ctx context.Context, req resource.U
 	respBody["parentId"] = parentId
 	respBody["name"] = name
 
-	stateObj, diags := tfconv.Flatten(ctx, r.schema.Type(), respBody, tfconv.WithSnakeCamel())
+	stateObj, diags := tfconv.Flatten(ctx, r.schema.Type(), respBody, nil)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return

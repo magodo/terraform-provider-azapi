@@ -5,7 +5,23 @@ import (
 	"unicode"
 )
 
-// SnakeCamelNameMapper is the a name mapper: snake_case <-> camelCase.
+type NameMapper interface {
+	ToCamelCase(string) string
+	ToSnakeCase(string) string
+}
+
+// NoopNameMapper is a name mapper that keeps the original name
+type NoopNameMapper struct{}
+
+func (NoopNameMapper) ToCamelCase(in string) string {
+	return in
+}
+
+func (NoopNameMapper) ToSnakeCase(in string) string {
+	return in
+}
+
+// SnakeCamelNameMapper is a name mapper: snake_case <-> camelCase.
 type SnakeCamelNameMapper struct {
 	overrides map[string]string
 	reverse   map[string]string
@@ -28,12 +44,22 @@ func NewSnakeCamelNameMapper(overrides map[string]string) SnakeCamelNameMapper {
 
 // ToCamelCase is a naive while override-able conversion from snake case to camel case.
 // It takes each underscore as a boundary.
-func (m *SnakeCamelNameMapper) ToCamelCase(input string) string {
+func (m SnakeCamelNameMapper) ToCamelCase(input string) string {
 	if v, ok := m.overrides[input]; ok {
 		return v
 	}
 
 	return ToCamelCaseNaive(input)
+}
+
+// ToSnakeCase is a naive while override-able conversion from camel case to snake case.
+// It takes each capitalized letter as a boundary.
+func (m SnakeCamelNameMapper) ToSnakeCase(input string) string {
+	if v, ok := m.reverse[input]; ok {
+		return v
+	}
+
+	return ToSnakeCaseNaive(input)
 }
 
 // ToCamelCaseNaive takes each underscore as a boundary.
@@ -58,27 +84,15 @@ func ToCamelCaseNaive(input string) string {
 	return b.String()
 }
 
-// ToSnakeCase is a naive while override-able conversion from camel case to snake case.
-// It takes each capitalized letter as a boundary.
-func (m *SnakeCamelNameMapper) ToSnakeCase(input string) string {
-	if v, ok := m.reverse[input]; ok {
-		return v
-	}
-
-	return ToSnakeCaseNaive(input)
-}
-
 // ToSnakeCaseNaive takes each capitalized letter as a boundary.
 func ToSnakeCaseNaive(input string) string {
 	if input == "" {
 		return input
 	}
 	var b strings.Builder
-	for i, r := range input {
+	for _, r := range input {
 		if unicode.IsUpper(r) {
-			if i > 0 {
-				b.WriteRune('_')
-			}
+			b.WriteRune('_')
 			b.WriteRune(unicode.ToLower(r))
 		} else {
 			b.WriteRune(r)
