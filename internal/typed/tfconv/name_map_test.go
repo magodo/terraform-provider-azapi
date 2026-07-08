@@ -2,9 +2,8 @@ package tfconv
 
 import "testing"
 
-func TestToCamelCase(t *testing.T) {
+func TestToCamelCaseNaive(t *testing.T) {
 	t.Parallel()
-	m := NewSnakeCamelNameMapper(nil)
 	tests := map[string]string{
 		"":                 "",
 		"id":               "id",
@@ -17,15 +16,14 @@ func TestToCamelCase(t *testing.T) {
 		"already_snake_ok": "alreadySnakeOk",
 	}
 	for in, want := range tests {
-		if got := m.ToCamelCase(in); got != want {
-			t.Errorf("ToCamelCase(%q) = %q, want %q", in, got, want)
+		if got := ToCamelCaseNaive(in); got != want {
+			t.Errorf("ToCamelCaseNaive(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
-func TestToSnakeCase(t *testing.T) {
+func TestToSnakeCaseNaive(t *testing.T) {
 	t.Parallel()
-	m := NewSnakeCamelNameMapper(nil)
 	tests := map[string]string{
 		"":            "",
 		"id":          "id",
@@ -38,28 +36,75 @@ func TestToSnakeCase(t *testing.T) {
 		"a2b":         "a2b",
 	}
 	for in, want := range tests {
-		if got := m.ToSnakeCase(in); got != want {
-			t.Errorf("ToSnakeCase(%q) = %q, want %q", in, got, want)
+		if got := ToSnakeCaseNaive(in); got != want {
+			t.Errorf("ToSnakeCaseNaive(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
-func TestSnakeCamelMapper_Overrides(t *testing.T) {
+func TestToSnakeCaseSmart(t *testing.T) {
 	t.Parallel()
-	m := NewSnakeCamelNameMapper(map[string]string{
-		"id":         "ID",
-		"custom_key": "CustomKey",
-	})
-
 	tests := map[string]string{
-		"":           "",
-		"ID":         "id",
-		"CustomKey":  "custom_key",
-		"HTTPServer": "_h_t_t_p_server",
+		"":            "",
+		"id":          "id",
+		"someField":   "some_field",
+		"SomeField":   "some_field",
+		"HTTPServer":  "http_server",
+		"URL":         "url",
+		"userID":      "user_id",
+		"parseXMLDoc": "parse_xml_doc",
+		"a2b":         "a2b",
 	}
 	for in, want := range tests {
-		if got := m.ToSnakeCase(in); got != want {
-			t.Errorf("ToSnakeCase(%q) = %q, want %q", in, got, want)
+		if got := ToSnakeCaseSmart(in); got != want {
+			t.Errorf("ToSnakeCaseSmart(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCamelSnakeMapper_ToSnakeCase(t *testing.T) {
+	t.Parallel()
+	m := NewCamelSnakeNameMapper(map[string]string{
+		"aID":         "a_id",
+		"aID.bId.aid": "a_id",
+	})
+
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"id", "id"},
+		{"aID", "a_id"},
+		{"aID.bId", "b_id"},
+		{"aID.bId.aid", "a_id"},
+	}
+	for _, tt := range tests {
+		if got := m.ToSnakeCase(tt.in); got != tt.want {
+			t.Errorf("CamelSnakeMapper.ToSnakeCase(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestCamelSnakeMapper_ToCamelCase(t *testing.T) {
+	t.Parallel()
+	m := NewCamelSnakeNameMapper(map[string]string{
+		"aID":         "a_id",
+		"aID.bId.aid": "a_id",
+	})
+
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"a_id", "aID"},
+		{"a_id.b_id", "bId"},
+		{"a_id.b_id.aid", "aid"},
+	}
+	for _, tt := range tests {
+		if got := m.ToCamelCase(tt.in); got != tt.want {
+			t.Errorf("CamelSnakeMapper.ToCamelCase(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }

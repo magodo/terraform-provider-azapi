@@ -6,6 +6,6 @@ type Option struct {
 
 func NewDefaultOption() Option {
 	return Option{
-		NameMapper: NewSnakeCamelNameMapper(nil),
+		NameMapper: NewCamelSnakeNameMapper(nil),
 	}
 }

@@ -111,16 +111,30 @@ func TestExpand_WithOverrides(t *testing.T) {
 	attrTypes := map[string]attr.Type{
 		"id":         basetypes.StringType{},
 		"user_email": basetypes.StringType{},
+		"object": basetypes.ObjectType{
+			AttrTypes: map[string]attr.Type{
+				"id": basetypes.StringType{},
+			},
+		},
 	}
 	ov := basetypes.NewObjectValueMust(attrTypes, map[string]attr.Value{
 		"id":         basetypes.NewStringValue("r-1"),
 		"user_email": basetypes.NewStringValue("a@b"),
+		"object": basetypes.NewObjectValueMust(
+			map[string]attr.Type{
+				"id": basetypes.StringType{},
+			},
+			map[string]attr.Value{
+				"id": basetypes.NewStringValue("x"),
+			},
+		),
 	})
 
 	got, diags := Expand(t.Context(), ov, &Option{
-		NameMapper: NewSnakeCamelNameMapper(
+		NameMapper: NewCamelSnakeNameMapper(
 			map[string]string{
-				"id": "ID",
+				"ID":        "id",
+				"object.iD": "id",
 			},
 		),
 	})
@@ -130,6 +144,9 @@ func TestExpand_WithOverrides(t *testing.T) {
 	want := map[string]any{
 		"ID":        "r-1",
 		"userEmail": "a@b",
+		"object": map[string]any{
+			"iD": "x",
+		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("mismatch (-want +got):\n%s", diff)
@@ -222,15 +239,24 @@ func TestFlatten_WithOverrides(t *testing.T) {
 	schemaType := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
 		"id":         basetypes.StringType{},
 		"user_email": basetypes.StringType{},
+		"object": basetypes.ObjectType{
+			AttrTypes: map[string]attr.Type{
+				"id": basetypes.StringType{},
+			},
+		},
 	}}
 	apiResp := map[string]any{
 		"ID":        "r-1",
 		"userEmail": "a@b",
+		"object": map[string]any{
+			"iD": "x",
+		},
 	}
 	got, diags := Flatten(t.Context(), schemaType, apiResp, &Option{
-		NameMapper: NewSnakeCamelNameMapper(
+		NameMapper: NewCamelSnakeNameMapper(
 			map[string]string{
-				"id": "ID",
+				"ID":        "id",
+				"object.iD": "id",
 			},
 		),
 	})
@@ -240,6 +266,14 @@ func TestFlatten_WithOverrides(t *testing.T) {
 	want := basetypes.NewObjectValueMust(schemaType.AttrTypes, map[string]attr.Value{
 		"id":         basetypes.NewStringValue("r-1"),
 		"user_email": basetypes.NewStringValue("a@b"),
+		"object": basetypes.NewObjectValueMust(
+			map[string]attr.Type{
+				"id": basetypes.StringType{},
+			},
+			map[string]attr.Value{
+				"id": basetypes.NewStringValue("x"),
+			},
+		),
 	})
 	if !got.Equal(want) {
 		t.Fatalf("want %s, got %s", want, got)
@@ -268,7 +302,11 @@ func TestRoundTrip_WithNaming(t *testing.T) {
 			"inner_key": basetypes.StringType{},
 		}},
 	}}
-	opt := Option{NameMapper: NewSnakeCamelNameMapper(map[string]string{"id": "ID"})}
+	opt := Option{NameMapper: NewCamelSnakeNameMapper(map[string]string{
+		"ID":                    "id",
+		"nestedOBJECT":          "nested_object",
+		"nestedOBJECT.innerKEY": "inner_key",
+	})}
 
 	apiResp := map[string]any{
 		"ID":         "res-42",
@@ -279,7 +317,7 @@ func TestRoundTrip_WithNaming(t *testing.T) {
 		"ruleList": []any{
 			map[string]any{"portNumber": float64(22), "protoName": "tcp"},
 		},
-		"nestedObject": map[string]any{"innerKey": "hello"},
+		"nestedOBJECT": map[string]any{"innerKEY": "hello"},
 	}
 
 	v, diags := Flatten(t.Context(), schemaType, apiResp, &opt)
@@ -299,7 +337,7 @@ func TestRoundTrip_WithNaming(t *testing.T) {
 		"ruleList": []any{
 			map[string]any{"portNumber": int64(22), "protoName": "tcp"},
 		},
-		"nestedObject": map[string]any{"innerKey": "hello"},
+		"nestedOBJECT": map[string]any{"innerKEY": "hello"},
 	}
 	if diff := cmp.Diff(want, rt); diff != "" {
 		t.Fatalf("round-trip mismatch (-want +got):\n%s", diff)
