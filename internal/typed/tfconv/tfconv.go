@@ -146,6 +146,9 @@ func expandSlice(ctx context.Context, elems []attr.Value, opt Option, paths []st
 		if diags.HasError() {
 			return nil, diags
 		}
+		if raw == nil && opt.ExpandSkipNull[strings.Join(newPaths, ".")] {
+			continue
+		}
 		out = append(out, raw)
 	}
 	return out, diags
@@ -168,6 +171,11 @@ func expandStringMap(ctx context.Context, elems map[string]attr.Value, opt Optio
 		if diags.HasError() {
 			return nil, diags
 		}
+
+		if raw == nil && opt.ExpandSkipNull[strings.Join(newPaths, ".")] {
+			continue
+		}
+
 		outKey := k
 		if isObj {
 			outKey = opt.NameMapper.ToCamelCase(strings.Join(newPaths, "."))

@@ -37,7 +37,7 @@ Instead of making this an expand config, we shall simply declare the TF attribut
 
 ## Flatten
 
-Due to the same reason, when we meet the API response, we need to do the reverse, but with a slight difference: Both `null` and absent in API response ends up to be TF value of `null` (as TF regards `null` and absense the same).
+When we meet the API response, it is tempting that we need to do the reverse as Expand. But there is a slight difference: Both `null` and absent in API response ends up to be TF value of `null` (as TF regards `null` and absense the same). This means we actually don't need flatten config.
 
 Again for the "zero" value case, we regard zero value has no difference than other known values. If there causes a diff due to the config/plan has a null value, it is reasonable enough to mark that attribute O+C, which reflects the actual API behavior (takes null returns zero).
 

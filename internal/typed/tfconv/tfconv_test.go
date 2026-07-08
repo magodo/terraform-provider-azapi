@@ -153,6 +153,103 @@ func TestExpand_WithOverrides(t *testing.T) {
 	}
 }
 
+func TestExpand_SkipNull(t *testing.T) {
+	t.Parallel()
+
+	attrTypes := map[string]attr.Type{
+		"str":      basetypes.StringType{},
+		"str_null": basetypes.StringType{},
+		"obj": basetypes.ObjectType{
+			AttrTypes: map[string]attr.Type{
+				"str":      basetypes.StringType{},
+				"str_null": basetypes.StringType{},
+			},
+		},
+		"map": basetypes.MapType{
+			ElemType: basetypes.StringType{},
+		},
+		"list": basetypes.ListType{
+			ElemType: basetypes.StringType{},
+		},
+	}
+	ov := basetypes.NewObjectValueMust(attrTypes, map[string]attr.Value{
+		"str":      basetypes.NewStringValue("x"),
+		"str_null": basetypes.NewStringNull(),
+		"obj": basetypes.NewObjectValueMust(
+			attrTypes["obj"].(basetypes.ObjectType).AttrTypes,
+			map[string]attr.Value{
+				"str":      basetypes.NewStringValue("x"),
+				"str_null": basetypes.NewStringNull(),
+			},
+		),
+		"map": basetypes.NewMapValueMust(
+			basetypes.StringType{},
+			map[string]attr.Value{
+				"str":      basetypes.NewStringValue("x"),
+				"str_null": basetypes.NewStringNull(),
+			}),
+		"list": basetypes.NewListValueMust(
+			attrTypes["list"].(basetypes.ListType).ElemType,
+			[]attr.Value{
+				basetypes.NewStringValue("x"),
+				basetypes.NewStringNull(),
+			},
+		),
+	})
+
+	// Without skip null option
+	t.Run("without skip null", func(t *testing.T) {
+		got, diags := Expand(t.Context(), ov, nil)
+		if diags.HasError() {
+			t.Fatal(diags)
+		}
+		want := map[string]any{
+			"str":     "x",
+			"strNull": nil,
+			"obj": map[string]any{
+				"str":     "x",
+				"strNull": nil,
+			},
+			"map": map[string]any{
+				"str":      "x",
+				"str_null": nil,
+			},
+			"list": []any{"x", nil},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("mismatch (-want +got):\n%s", diff)
+		}
+	})
+	// With skip null option
+	t.Run("without skip null", func(t *testing.T) {
+		got, diags := Expand(t.Context(), ov, &Option{
+			NameMapper: NewCamelSnakeNameMapper(nil),
+			ExpandSkipNull: map[string]bool{
+				"str_null":     true,
+				"obj.str_null": true,
+				"map.*":        true,
+				"list.*":       true,
+			},
+		})
+		if diags.HasError() {
+			t.Fatal(diags)
+		}
+		want := map[string]any{
+			"str": "x",
+			"obj": map[string]any{
+				"str": "x",
+			},
+			"map": map[string]any{
+				"str": "x",
+			},
+			"list": []any{"x"},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("mismatch (-want +got):\n%s", diff)
+		}
+	})
+}
+
 // -----------------------------------------------------------------------------
 // Flatten
 // -----------------------------------------------------------------------------
@@ -284,7 +381,7 @@ func TestFlatten_WithOverrides(t *testing.T) {
 // Round-trip
 // -----------------------------------------------------------------------------
 
-func TestRoundTrip_WithNaming(t *testing.T) {
+func TestExpandFlattenRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	ruleType := basetypes.ObjectType{AttrTypes: map[string]attr.Type{
