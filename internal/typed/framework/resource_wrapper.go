@@ -262,15 +262,14 @@ func (r resourceWrapper) Read(ctx context.Context, req resource.ReadRequest, res
 	defer cancel()
 
 	// Build the resource id
-	var name, parentId string
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("name"), &name)...)
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("parent_id"), &parentId)...)
+	var idstr string
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("id"), &idstr)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	id, err := parse.NewResourceID(name, parentId, r.AzureResourceType())
+	id, err := parse.ResourceID(idstr)
 	if err != nil {
-		resp.Diagnostics.AddError("failed to new resource id", err.Error())
+		resp.Diagnostics.AddError(fmt.Sprintf("failed to parse resource id %q", idstr), err.Error())
 		return
 	}
 	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "id", id.ID())
