@@ -28,7 +28,7 @@ func TestExpand_ObjectSnakeToCamel(t *testing.T) {
 		"is_enabled": basetypes.NewBoolValue(true),
 	})
 
-	got, diags := Expand(t.Context(), ov, nil)
+	got, diags := NewModelConv(nil).Expand(t.Context(), ov)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -54,7 +54,7 @@ func TestExpand_MapKeysNotTranslated(t *testing.T) {
 			"cost_owner": basetypes.NewStringValue("core"),
 		})})
 
-	got, diags := Expand(t.Context(), ov, nil)
+	got, diags := NewModelConv(nil).Expand(t.Context(), ov)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -88,7 +88,7 @@ func TestExpand_NestedObjectTranslated(t *testing.T) {
 		}),
 	})
 
-	got, diags := Expand(t.Context(), ov, nil)
+	got, diags := NewModelConv(nil).Expand(t.Context(), ov)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -130,14 +130,12 @@ func TestExpand_WithOverrides(t *testing.T) {
 		),
 	})
 
-	got, diags := Expand(t.Context(), ov, &Option{
-		NameMapper: NewCamelSnakeNameMapper(
-			map[string]string{
-				"ID":        "id",
-				"object.iD": "id",
-			},
-		),
-	})
+	got, diags := NewModelConv(&Option{
+		NameOverrides: map[string]string{
+			"ID":        "id",
+			"object.iD": "id",
+		},
+	}).Expand(t.Context(), ov)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -199,7 +197,7 @@ func TestExpand_SkipNull(t *testing.T) {
 
 	// Without skip null option
 	t.Run("without skip null", func(t *testing.T) {
-		got, diags := Expand(t.Context(), ov, nil)
+		got, diags := NewModelConv(nil).Expand(t.Context(), ov)
 		if diags.HasError() {
 			t.Fatal(diags)
 		}
@@ -222,15 +220,14 @@ func TestExpand_SkipNull(t *testing.T) {
 	})
 	// With skip null option
 	t.Run("without skip null", func(t *testing.T) {
-		got, diags := Expand(t.Context(), ov, &Option{
-			NameMapper: NewCamelSnakeNameMapper(nil),
+		got, diags := NewModelConv(&Option{
 			ExpandSkipNull: map[string]bool{
 				"str_null":     true,
 				"obj.str_null": true,
 				"map.*":        true,
 				"list.*":       true,
 			},
-		})
+		}).Expand(t.Context(), ov)
 		if diags.HasError() {
 			t.Fatal(diags)
 		}
@@ -267,7 +264,7 @@ func TestFlatten_ObjectCamelToSnake(t *testing.T) {
 		"itemCount": float64(3),
 		"isEnabled": true,
 	}
-	got, diags := Flatten(t.Context(), schemaType, apiResp, nil)
+	got, diags := NewModelConv(nil).Flatten(t.Context(), schemaType, apiResp)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -293,7 +290,7 @@ func TestFlatten_MapKeysNotTranslated(t *testing.T) {
 			"cost_owner": "core",
 		},
 	}
-	got, diags := Flatten(t.Context(), schemaType, apiResp, nil)
+	got, diags := NewModelConv(nil).Flatten(t.Context(), schemaType, apiResp)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -317,7 +314,7 @@ func TestFlatten_MissingCamelKeyBecomesNull(t *testing.T) {
 	}}
 	// Only "presentField" in the payload; "missingField" absent.
 	apiResp := map[string]any{"presentField": "hi"}
-	got, diags := Flatten(t.Context(), schemaType, apiResp, nil)
+	got, diags := NewModelConv(nil).Flatten(t.Context(), schemaType, apiResp)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -349,14 +346,12 @@ func TestFlatten_WithOverrides(t *testing.T) {
 			"iD": "x",
 		},
 	}
-	got, diags := Flatten(t.Context(), schemaType, apiResp, &Option{
-		NameMapper: NewCamelSnakeNameMapper(
-			map[string]string{
-				"ID":        "id",
-				"object.iD": "id",
-			},
-		),
-	})
+	got, diags := NewModelConv(&Option{
+		NameOverrides: map[string]string{
+			"ID":        "id",
+			"object.iD": "id",
+		},
+	}).Flatten(t.Context(), schemaType, apiResp)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -399,11 +394,13 @@ func TestExpandFlattenRoundTrip(t *testing.T) {
 			"inner_key": basetypes.StringType{},
 		}},
 	}}
-	opt := Option{NameMapper: NewCamelSnakeNameMapper(map[string]string{
-		"ID":                    "id",
-		"nestedOBJECT":          "nested_object",
-		"nestedOBJECT.innerKEY": "inner_key",
-	})}
+	mc := NewModelConv(&Option{
+		NameOverrides: map[string]string{
+			"ID":                    "id",
+			"nestedOBJECT":          "nested_object",
+			"nestedOBJECT.innerKEY": "inner_key",
+		},
+	})
 
 	apiResp := map[string]any{
 		"ID":         "res-42",
@@ -417,11 +414,11 @@ func TestExpandFlattenRoundTrip(t *testing.T) {
 		"nestedOBJECT": map[string]any{"innerKEY": "hello"},
 	}
 
-	v, diags := Flatten(t.Context(), schemaType, apiResp, &opt)
+	v, diags := mc.Flatten(t.Context(), schemaType, apiResp)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
-	rt, diags := Expand(t.Context(), v, &opt)
+	rt, diags := mc.Expand(t.Context(), v)
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
@@ -476,7 +473,7 @@ func TestExpand_Primitives(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, diags := Expand(t.Context(), tc.in, nil)
+			got, diags := NewModelConv(nil).Expand(t.Context(), tc.in)
 			if diags.HasError() {
 				t.Fatalf("unexpected diags: %v", diags)
 			}
@@ -507,7 +504,7 @@ func TestFlatten_Primitives(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, diags := Flatten(t.Context(), tc.targetType, tc.data, nil)
+			got, diags := NewModelConv(nil).Flatten(t.Context(), tc.targetType, tc.data)
 			if diags.HasError() {
 				t.Fatalf("unexpected diags: %v", diags)
 			}

@@ -16,6 +16,22 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
+type ModelConv struct {
+	nm             NameMapper
+	expandSkipNull map[string]bool
+}
+
+func NewModelConv(opt *Option) ModelConv {
+	if opt == nil {
+		opt = new(NewDefaultOption())
+	}
+	return ModelConv{
+		nm:             NewCamelSnakeNameMapper(opt.NameOverrides),
+		expandSkipNull: opt.ExpandSkipNull,
+	}
+
+}
+
 // -----------------------------------------------------------------------------
 // Expand: attr.Value  ->  Go native
 // -----------------------------------------------------------------------------
@@ -26,14 +42,11 @@ import (
 // Note: Null and unknown values become nil atm.
 // Note: Object attribute keys are translated through the supplied NameMapper, while Map
 // values and Dynamic-inferred object keys are NEVER translated.
-func Expand(ctx context.Context, v attr.Value, opt *Option) (any, diag.Diagnostics) {
-	if opt == nil {
-		opt = new(NewDefaultOption())
-	}
-	return expand(ctx, v, *opt, nil)
+func (mc ModelConv) Expand(ctx context.Context, v attr.Value) (any, diag.Diagnostics) {
+	return mc.expand(ctx, v, nil)
 }
 
-func expand(ctx context.Context, v attr.Value, opt Option, paths []string) (any, diag.Diagnostics) {
+func (mc ModelConv) expand(ctx context.Context, v attr.Value, paths []string) (any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if v == nil || v.IsNull() || v.IsUnknown() {
 		return nil, nil
@@ -47,8 +60,11 @@ func expand(ctx context.Context, v attr.Value, opt Option, paths []string) (any,
 			return nil, diags
 		}
 		// Underlying is user data — bypass name translation.
-		newOpt := Option{NameMapper: NoopNameMapper{}}
-		return expand(ctx, dv.UnderlyingValue(), newOpt, paths)
+		mmc := ModelConv{
+			nm:             NoopNameMapper{},
+			expandSkipNull: mc.expandSkipNull,
+		}
+		return mmc.expand(ctx, dv.UnderlyingValue(), paths)
 	case basetypes.BoolValuable:
 		bv, d := tv.ToBoolValue(ctx)
 		diags.Append(d...)
@@ -104,14 +120,14 @@ func expand(ctx context.Context, v attr.Value, opt Option, paths []string) (any,
 		if diags.HasError() {
 			return nil, diags
 		}
-		return expandSlice(ctx, lv.Elements(), opt, paths)
+		return mc.expandSlice(ctx, lv.Elements(), paths)
 	case basetypes.SetValuable:
 		sv, d := tv.ToSetValue(ctx)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
-		return expandSlice(ctx, sv.Elements(), opt, paths)
+		return mc.expandSlice(ctx, sv.Elements(), paths)
 	case basetypes.MapValuable:
 		mv, d := tv.ToMapValue(ctx)
 		diags.Append(d...)
@@ -119,16 +135,16 @@ func expand(ctx context.Context, v attr.Value, opt Option, paths []string) (any,
 			return nil, diags
 		}
 		// Map keys are user data — never translate.
-		return expandStringMap(ctx, mv.Elements(), opt, paths, false)
+		return mc.expandStringMap(ctx, mv.Elements(), paths, false)
 	case basetypes.ObjectValuable:
 		ov, d := tv.ToObjectValue(ctx)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
-		return expandStringMap(ctx, ov.Attributes(), opt, paths, true)
+		return mc.expandStringMap(ctx, ov.Attributes(), paths, true)
 	case basetypes.TupleValue:
-		return expandSlice(ctx, tv.Elements(), opt, paths)
+		return mc.expandSlice(ctx, tv.Elements(), paths)
 	}
 
 	diags.AddError("Unsupported attr.Value in tfconv.Expand",
@@ -136,17 +152,17 @@ func expand(ctx context.Context, v attr.Value, opt Option, paths []string) (any,
 	return nil, diags
 }
 
-func expandSlice(ctx context.Context, elems []attr.Value, opt Option, paths []string) ([]any, diag.Diagnostics) {
+func (mc ModelConv) expandSlice(ctx context.Context, elems []attr.Value, paths []string) ([]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	out := make([]any, 0, len(elems))
 	for _, e := range elems {
 		newPaths := append(slices.Clone(paths), "*")
-		raw, d := expand(ctx, e, opt, newPaths)
+		raw, d := mc.expand(ctx, e, newPaths)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
-		if raw == nil && opt.ExpandSkipNull[strings.Join(newPaths, ".")] {
+		if raw == nil && mc.expandSkipNull[strings.Join(newPaths, ".")] {
 			continue
 		}
 		out = append(out, raw)
@@ -156,7 +172,7 @@ func expandSlice(ctx context.Context, elems []attr.Value, opt Option, paths []st
 
 // expandStringMap writes children into a map. When isObj is true, keys
 // are passed through NameMapper; otherwise they're used verbatim.
-func expandStringMap(ctx context.Context, elems map[string]attr.Value, opt Option, paths []string, isObj bool) (map[string]any, diag.Diagnostics) {
+func (mc ModelConv) expandStringMap(ctx context.Context, elems map[string]attr.Value, paths []string, isObj bool) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	out := make(map[string]any, len(elems))
 	for k, e := range elems {
@@ -166,19 +182,19 @@ func expandStringMap(ctx context.Context, elems map[string]attr.Value, opt Optio
 		} else {
 			newPaths = append(slices.Clone(paths), "*")
 		}
-		raw, d := expand(ctx, e, opt, newPaths)
+		raw, d := mc.expand(ctx, e, newPaths)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
 		}
 
-		if raw == nil && opt.ExpandSkipNull[strings.Join(newPaths, ".")] {
+		if raw == nil && mc.expandSkipNull[strings.Join(newPaths, ".")] {
 			continue
 		}
 
 		outKey := k
 		if isObj {
-			outKey = opt.NameMapper.ToCamelCase(strings.Join(newPaths, "."))
+			outKey = mc.nm.ToCamelCase(strings.Join(newPaths, "."))
 		}
 		out[outKey] = raw
 	}
@@ -193,14 +209,11 @@ func expandStringMap(ctx context.Context, elems map[string]attr.Value, opt Optio
 // targetType. Object attribute keys in `data` are looked up by translating
 // the schema (TF) name through the NameMapper. Map values and DynamicType-inferred
 // object keys are used verbatim.
-func Flatten(ctx context.Context, targetType attr.Type, data any, opt *Option) (attr.Value, diag.Diagnostics) {
-	if opt == nil {
-		opt = new(NewDefaultOption())
-	}
-	return flatten(ctx, targetType, data, *opt, nil)
+func (mc ModelConv) Flatten(ctx context.Context, targetType attr.Type, data any) (attr.Value, diag.Diagnostics) {
+	return mc.flatten(ctx, targetType, data, nil)
 }
 
-func flatten(ctx context.Context, targetType attr.Type, data any, opt Option, paths []string) (attr.Value, diag.Diagnostics) {
+func (mc ModelConv) flatten(ctx context.Context, targetType attr.Type, data any, paths []string) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if data == nil {
 		return nullValue(ctx, targetType)
@@ -273,15 +286,15 @@ func flatten(ctx context.Context, targetType attr.Type, data any, opt Option, pa
 		diags.Append(d...)
 		return tv, diags
 	case basetypes.ObjectTypable:
-		return flattenObject(ctx, t, data, opt, paths)
+		return mc.flattenObject(ctx, t, data, paths)
 	case basetypes.MapTypable:
-		return flattenMap(ctx, t, data, opt, paths)
+		return mc.flattenMap(ctx, t, data, paths)
 	case basetypes.SetTypable:
-		return flattenSet(ctx, t, data, opt, paths)
+		return mc.flattenSet(ctx, t, data, paths)
 	case basetypes.ListTypable:
-		return flattenList(ctx, t, data, opt, paths)
+		return mc.flattenList(ctx, t, data, paths)
 	case basetypes.TupleType:
-		return flattenTuple(ctx, t, data, opt, paths)
+		return mc.flattenTuple(ctx, t, data, paths)
 	}
 
 	diags.AddError("Unsupported attr.Type in tfconv.Flatten",
@@ -289,7 +302,7 @@ func flatten(ctx context.Context, targetType attr.Type, data any, opt Option, pa
 	return nil, diags
 }
 
-func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, opt Option, paths []string) (attr.Value, diag.Diagnostics) {
+func (mc ModelConv) flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, paths []string) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	m, ok := data.(map[string]any)
 	if !ok {
@@ -305,8 +318,8 @@ func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, opt
 	attrs := make(map[string]attr.Value, len(attrTypes))
 	for attrName, attrType := range attrTypes {
 		newPaths := append(slices.Clone(paths), attrName)
-		apiName := opt.NameMapper.ToCamelCase(strings.Join(newPaths, "."))
-		child, d := flatten(ctx, attrType, m[apiName], opt, newPaths)
+		apiName := mc.nm.ToCamelCase(strings.Join(newPaths, "."))
+		child, d := mc.flatten(ctx, attrType, m[apiName], newPaths)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -323,7 +336,7 @@ func flattenObject(ctx context.Context, t basetypes.ObjectTypable, data any, opt
 	return v, diags
 }
 
-func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, opt Option, paths []string) (attr.Value, diag.Diagnostics) {
+func (mc ModelConv) flattenMap(ctx context.Context, t basetypes.MapTypable, data any, paths []string) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	m, ok := data.(map[string]any)
 	if !ok {
@@ -341,7 +354,7 @@ func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, opt Optio
 	elems := make(map[string]attr.Value, len(m))
 	for k, raw := range m {
 		newPaths := append(slices.Clone(paths), "*")
-		child, d := flatten(ctx, et, raw, opt, newPaths)
+		child, d := mc.flatten(ctx, et, raw, newPaths)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -358,7 +371,7 @@ func flattenMap(ctx context.Context, t basetypes.MapTypable, data any, opt Optio
 	return v, diags
 }
 
-func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, opt Option, paths []string) (attr.Value, diag.Diagnostics) {
+func (mc ModelConv) flattenSet(ctx context.Context, t basetypes.SetTypable, data any, paths []string) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
@@ -376,7 +389,7 @@ func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, opt Optio
 	elems := make([]attr.Value, 0, len(s))
 	for _, raw := range s {
 		newPaths := append(slices.Clone(paths), "*")
-		child, d := flatten(ctx, et, raw, opt, newPaths)
+		child, d := mc.flatten(ctx, et, raw, newPaths)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -393,7 +406,7 @@ func flattenSet(ctx context.Context, t basetypes.SetTypable, data any, opt Optio
 	return v, diags
 }
 
-func flattenList(ctx context.Context, t basetypes.ListTypable, data any, opt Option, paths []string) (attr.Value, diag.Diagnostics) {
+func (mc ModelConv) flattenList(ctx context.Context, t basetypes.ListTypable, data any, paths []string) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
@@ -409,7 +422,7 @@ func flattenList(ctx context.Context, t basetypes.ListTypable, data any, opt Opt
 	elems := make([]attr.Value, 0, len(s))
 	for _, raw := range s {
 		newPaths := append(slices.Clone(paths), "*")
-		child, d := flatten(ctx, et, raw, opt, newPaths)
+		child, d := mc.flatten(ctx, et, raw, newPaths)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags
@@ -426,7 +439,7 @@ func flattenList(ctx context.Context, t basetypes.ListTypable, data any, opt Opt
 	return v, diags
 }
 
-func flattenTuple(ctx context.Context, t basetypes.TupleType, data any, opt Option, paths []string) (attr.Value, diag.Diagnostics) {
+func (mc ModelConv) flattenTuple(ctx context.Context, t basetypes.TupleType, data any, paths []string) (attr.Value, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	s, ok := data.([]any)
 	if !ok {
@@ -440,7 +453,7 @@ func flattenTuple(ctx context.Context, t basetypes.TupleType, data any, opt Opti
 	elems := make([]attr.Value, len(s))
 	for i, raw := range s {
 		newPaths := append(slices.Clone(paths), "*")
-		child, d := flatten(ctx, t.ElemTypes[i], raw, opt, newPaths)
+		child, d := mc.flatten(ctx, t.ElemTypes[i], raw, newPaths)
 		diags.Append(d...)
 		if diags.HasError() {
 			return nil, diags

@@ -133,6 +133,8 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 
+	mc := modelconv.NewModelConv(r.GetModelConvOption())
+
 	// Build the resource id
 	var name, parentId string
 	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("name"), &name)...)
@@ -171,7 +173,7 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	// Create the resource
 	{
 		r.Info(ctx, "Start to create the resource")
-		apiReqAny, diags := modelconv.Expand(ctx, plan, nil)
+		apiReqAny, diags := mc.Expand(ctx, plan)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -209,6 +211,8 @@ func (r resourceWrapper) read(ctx context.Context, id parse.ResourceId, state *t
 	r.Info(ctx, "Start to read the resource")
 	defer r.Info(ctx, "Finish to read the resource")
 
+	mc := modelconv.NewModelConv(r.GetModelConvOption())
+
 	apiRespAny, err := r.meta.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.DefaultRequestOptions())
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
@@ -221,7 +225,7 @@ func (r resourceWrapper) read(ctx context.Context, id parse.ResourceId, state *t
 
 	respBody := apiRespAny.(map[string]any)
 
-	stateObj, diags := modelconv.Flatten(ctx, r.GetSchema(ctx).Type(), respBody, nil)
+	stateObj, diags := mc.Flatten(ctx, r.GetSchema(ctx).Type(), respBody)
 	if diags.HasError() {
 		return diags
 	}
@@ -319,6 +323,8 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 
+	mc := modelconv.NewModelConv(r.GetModelConvOption())
+
 	// Build the resource id
 	var name, parentId string
 	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("name"), &name)...)
@@ -342,7 +348,7 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 	// Update the resource
 	{
 		tflog.SubsystemInfo(ctx, r.TFResourceType(), "Start to update the resource")
-		apiReqAny, diags := modelconv.Expand(ctx, plan, nil)
+		apiReqAny, diags := mc.Expand(ctx, plan)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return

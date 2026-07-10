@@ -1,18 +1,19 @@
 package modelconv
 
 type Option struct {
-	NameMapper NameMapper
+	// NameOverrides is a map from API attribute *path* => TF attribute name
+	NameOverrides map[string]string
 
 	// ExpandSkipNull modifies the expand behavior when the TF value is null.
 	// By default, it will be converted to an explicit JSON null.
 	// This modifier changes it to be omit in the JSON value.
-	// The key here is the TF attribute path.
+	// The key here is the TF attribute *path*.
 	ExpandSkipNull map[string]bool
 }
 
 func NewDefaultOption() Option {
 	return Option{
-		NameMapper:     NewCamelSnakeNameMapper(nil),
+		NameOverrides:  map[string]string{},
 		ExpandSkipNull: map[string]bool{},
 	}
 }

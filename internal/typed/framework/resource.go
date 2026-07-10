@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	tffwdocs "github.com/magodo/terraform-plugin-framework-docs"
@@ -20,6 +21,9 @@ type Resource interface {
 
 	// Get the resource schema.
 	GetSchema(context.Context) schema.Schema
+
+	// GetModelConvOption returns the modelconv.Option
+	GetModelConvOption() *modelconv.Option
 
 	// ResourceWithRenderOption implements the interface to generate document.
 	RenderOption() tffwdocs.ResourceRenderOption

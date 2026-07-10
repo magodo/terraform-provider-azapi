@@ -7,6 +7,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services/myplanmodifier"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/framework"
+	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -86,6 +87,10 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 			}),
 		},
 	}
+}
+
+func (r AzApiVirtualNetworkResource) GetModelConvOption() *modelconv.Option {
+	return nil
 }
 
 func (r AzApiVirtualNetworkResource) RenderOption() tffwdocs.ResourceRenderOption {

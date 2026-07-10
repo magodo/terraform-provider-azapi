@@ -26,7 +26,7 @@ type CamelSnakeNameMapper struct {
 	overrides map[string]string
 }
 
-// NewCamelSnakeNameMapper creates a new SnakeCamelNameMapper, with an override map (snake -> camel)
+// NewCamelSnakeNameMapper creates a new SnakeCamelNameMapper, with an override map (camel -> snake)
 func NewCamelSnakeNameMapper(overrides map[string]string) CamelSnakeNameMapper {
 	if overrides == nil {
 		overrides = make(map[string]string)
