@@ -11,8 +11,8 @@ import (
 
 // Resource interface defines the mandatory methods that a resource requires to implement.
 type Resource interface {
-	// TFResourceTypeSuffix returns the suffix of the terraform type of a resource/data source. E.g. virtual_network for azapi_virtual_network.
-	TFResourceTypeSuffix() string
+	// TFResourceType returns the terraform type of a resource/data source. E.g. azapi_virtual_network.
+	TFResourceType() string
 
 	// AzureResourceType returns the Azure resource type in the format of "<resourceType>@<api-version>".
 	// E.g. Microsoft.Network/virtualNetworks@2022-07-01

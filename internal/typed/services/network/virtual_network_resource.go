@@ -28,8 +28,8 @@ func (r AzApiVirtualNetworkResource) AzureResourceType() string {
 	return "Microsoft.Network/virtualNetworks@2022-07-01"
 }
 
-func (r AzApiVirtualNetworkResource) TFResourceTypeSuffix() string {
-	return "virtual_network"
+func (r AzApiVirtualNetworkResource) TFResourceType() string {
+	return "azapi_virtual_network"
 }
 
 func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schema {
