@@ -1,4 +1,4 @@
-package tfconv
+package modelconv
 
 import "testing"
 

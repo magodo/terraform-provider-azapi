@@ -8,7 +8,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/clients"
 	"github.com/Azure/terraform-provider-azapi/internal/services/parse"
 	"github.com/Azure/terraform-provider-azapi/internal/tf"
-	"github.com/Azure/terraform-provider-azapi/internal/typed/tfconv"
+	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 	"github.com/Azure/terraform-provider-azapi/utils"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -137,7 +137,7 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 
-	plan, diags := tfconv.ObjectFromRaw(ctx, r.GetSchema(ctx).Type(), req.Plan.Raw)
+	plan, diags := modelconv.ObjectFromRaw(ctx, r.GetSchema(ctx).Type(), req.Plan.Raw)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -174,7 +174,7 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	// Create the resource
 	{
 		r.Info(ctx, "Start to create the resource")
-		apiReqAny, diags := tfconv.Expand(ctx, plan, nil)
+		apiReqAny, diags := modelconv.Expand(ctx, plan, nil)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -220,7 +220,7 @@ func (r resourceWrapper) read(ctx context.Context, id parse.ResourceId, state *t
 
 	respBody := apiRespAny.(map[string]any)
 
-	stateObj, diags := tfconv.Flatten(ctx, r.GetSchema(ctx).Type(), respBody, nil)
+	stateObj, diags := modelconv.Flatten(ctx, r.GetSchema(ctx).Type(), respBody, nil)
 	if diags.HasError() {
 		return diags
 	}
@@ -276,7 +276,7 @@ func (r resourceWrapper) Read(ctx context.Context, req resource.ReadRequest, res
 	}
 
 	// Add up the special attributes not belong to the API response.
-	state, diags := tfconv.ObjectFromRaw(ctx, r.GetSchema(ctx).Type(), req.State.Raw)
+	state, diags := modelconv.ObjectFromRaw(ctx, r.GetSchema(ctx).Type(), req.State.Raw)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -312,7 +312,7 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 
-	plan, diags := tfconv.ObjectFromRaw(ctx, r.GetSchema(ctx).Type(), req.Plan.Raw)
+	plan, diags := modelconv.ObjectFromRaw(ctx, r.GetSchema(ctx).Type(), req.Plan.Raw)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -334,7 +334,7 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 	// Update the resource
 	{
 		tflog.SubsystemInfo(ctx, r.TypeName, "Start to update the resource")
-		apiReqAny, diags := tfconv.Expand(ctx, plan, nil)
+		apiReqAny, diags := modelconv.Expand(ctx, plan, nil)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return

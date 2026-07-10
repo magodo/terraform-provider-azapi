@@ -1,7 +1,7 @@
 // Package tfconv provides schema-driven expand/flatten helpers that bridge
 // terraform-plugin-framework attr.Value trees with untyped Go values
 // (map[string]any / []any) — the shape most REST/JSON API clients speak.
-package tfconv
+package modelconv
 
 import (
 	"context"

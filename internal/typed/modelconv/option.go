@@ -1,4 +1,4 @@
-package tfconv
+package modelconv
 
 type Option struct {
 	NameMapper NameMapper
