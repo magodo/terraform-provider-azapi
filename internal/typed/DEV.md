@@ -50,3 +50,11 @@ The plan is to keep the customization at the post-codegen phase while with hint 
 - Codegen phase takes camelCase and convert it to snake_case. During the conversion it checks whether the naive conversion matches the smart conversion, if it doesn't, it generates a record in the override mapping to reflect the smart conversion as the snake_case -> camelCase is always naive.
 - Customize the override mapping if the smart version is still not correct.
 - The expand/flatten pick up the override map.
+
+# TODO
+
+-[ ] Codegen
+-[ ] Framework: Update check HasChanged for each root level attribute.
+-[ ] Framework: Support identity
+-[ ] Framework: More behavior extension via implementing additional interfaces
+-[ ] Framework: Support data source
