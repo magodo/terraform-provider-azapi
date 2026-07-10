@@ -3,8 +3,6 @@ package network
 import (
 	"context"
 
-	"github.com/Azure/terraform-provider-azapi/internal/azure/location"
-	"github.com/Azure/terraform-provider-azapi/internal/services/myplanmodifier"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/framework"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
@@ -25,7 +23,7 @@ type AzApiVirtualNetworkResource struct {
 var _ framework.Resource = AzApiVirtualNetworkResource{}
 
 func (r AzApiVirtualNetworkResource) AzureResourceType() string {
-	return "Microsoft.Network/virtualNetworks@2022-07-01"
+	return "Microsoft.Network/virtualNetworks@2025-01-01"
 }
 
 func (r AzApiVirtualNetworkResource) TFResourceType() string {
@@ -53,9 +51,7 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 			"location": schema.StringAttribute{
 				Required: true,
 				PlanModifiers: []planmodifier.String{
-					myplanmodifier.UseStateWhen(func(a, b types.String) bool {
-						return location.Normalize(a.ValueString()) == location.Normalize(b.ValueString())
-					}),
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"properties": schema.SingleNestedAttribute{
@@ -69,6 +65,9 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 								ElementType: types.StringType,
 							},
 						},
+					},
+					"private_endpoint_vnet_policies": schema.StringAttribute{
+						Optional: true,
 					},
 				},
 			},
@@ -93,7 +92,11 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 }
 
 func (r AzApiVirtualNetworkResource) GetModelConvOption() *modelconv.Option {
-	var opt *modelconv.Option
+	opt := &modelconv.Option{
+		NameOverrides: map[string]string{
+			"properties.privateEndpointVNetPolicies": "private_endpoint_vnet_policies",
+		},
+	}
 	if r.hooks.ModelConvOptionHook != nil {
 		opt = r.hooks.ModelConvOptionHook(opt)
 	}
