@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	tffwdocs "github.com/magodo/terraform-plugin-framework-docs"
@@ -43,6 +44,27 @@ type ResourceWithTimeout interface {
 
 	// Timeout returns the timeout for each operation.
 	Timeout() ResourceTimeout
+}
+
+// ResourceWithPostCreate is an opt-in interface that can implement post-create operation.
+type ResourceWithPostCreate interface {
+	Resource
+
+	PostCreate(context.Context, resource.CreateRequest) diag.Diagnostics
+}
+
+// ResourceWithPostUpdate is an opt-in interface that can implement post-update operation.
+type ResourceWithPostUpdate interface {
+	Resource
+
+	PostUpdate(context.Context, resource.UpdateRequest) diag.Diagnostics
+}
+
+// ResourceWithPostDelete is an opt-in interface that can implement post-delete operation.
+type ResourceWithPostDelete interface {
+	Resource
+
+	PostDelete(context.Context, resource.DeleteRequest) diag.Diagnostics
 }
 
 // ResourceWithConfigValidators is an opt-in interface that can implement customized ConfigValidators.

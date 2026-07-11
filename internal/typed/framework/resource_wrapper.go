@@ -191,6 +191,14 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 		r.Info(ctx, "Finish to create the resource")
 	}
 
+	// (optional) PostCreate
+	if rr, ok := r.Resource.(ResourceWithPostCreate); ok {
+		resp.Diagnostics.Append(rr.PostCreate(ctx, req)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	// Read the resource
 	resp.Diagnostics.Append(r.read(ctx, id, &resp.State)...)
 	if resp.Diagnostics.HasError() {
@@ -365,6 +373,14 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 		tflog.SubsystemInfo(ctx, r.TFResourceType(), "Finish to update the resource")
 	}
 
+	// (optional) PostUpdate
+	if rr, ok := r.Resource.(ResourceWithPostUpdate); ok {
+		resp.Diagnostics.Append(rr.PostUpdate(ctx, req)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	// Read the resource
 	resp.Diagnostics.Append(r.read(ctx, id, &resp.State)...)
 	if resp.Diagnostics.HasError() {
@@ -429,6 +445,14 @@ func (r resourceWrapper) Delete(ctx context.Context, req resource.DeleteRequest,
 			return
 		}
 		tflog.SubsystemInfo(ctx, r.TFResourceType(), "Finish to delete the resource")
+	}
+
+	// (optional) PostDelete
+	if rr, ok := r.Resource.(ResourceWithPostDelete); ok {
+		resp.Diagnostics.Append(rr.PostDelete(ctx, req)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
 	}
 }
 
