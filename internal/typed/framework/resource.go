@@ -50,21 +50,21 @@ type ResourceWithTimeout interface {
 type ResourceWithPostCreate interface {
 	Resource
 
-	PostCreate(context.Context, resource.CreateRequest) diag.Diagnostics
+	PostCreate(context.Context, resource.CreateRequest, Meta) diag.Diagnostics
 }
 
 // ResourceWithPostUpdate is an opt-in interface that can implement post-update operation.
 type ResourceWithPostUpdate interface {
 	Resource
 
-	PostUpdate(context.Context, resource.UpdateRequest) diag.Diagnostics
+	PostUpdate(context.Context, resource.UpdateRequest, Meta) diag.Diagnostics
 }
 
 // ResourceWithPostDelete is an opt-in interface that can implement post-delete operation.
 type ResourceWithPostDelete interface {
 	Resource
 
-	PostDelete(context.Context, resource.DeleteRequest) diag.Diagnostics
+	PostDelete(context.Context, resource.DeleteRequest, Meta) diag.Diagnostics
 }
 
 // ResourceWithConfigValidators is an opt-in interface that can implement customized ConfigValidators.

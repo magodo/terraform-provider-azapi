@@ -1,10 +1,16 @@
 package network
 
 import (
+	"context"
+
+	"github.com/Azure/terraform-provider-azapi/internal/clients"
+	"github.com/Azure/terraform-provider-azapi/internal/typed/framework"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/servicehooks"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
@@ -35,4 +41,19 @@ func NewAzApiVirtualNetworkResource() AzApiVirtualNetworkResource {
 			},
 		},
 	}
+}
+
+// A dummy read post create to showcase.
+func (r AzApiVirtualNetworkResource) PostCreate(ctx context.Context, req resource.CreateRequest, meta framework.Meta) diag.Diagnostics {
+	id, diags := framework.ResourceIdFromPlan(ctx, req.Plan, r.AzureResourceType())
+	if diags.HasError() {
+		return diags
+	}
+
+	if _, err := meta.ResourceClient.Get(ctx, id.ID(), id.ApiVersion, clients.DefaultRequestOptions()); err != nil {
+		diags.AddError("failed to read resource", err.Error())
+		return diags
+	}
+
+	return diags
 }

@@ -99,7 +99,7 @@ func (r resourceWrapper) ImportState(ctx context.Context, req resource.ImportSta
 	}()
 
 	ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "Import")
+	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "Import")
 
 	if req.ID != "" {
 		// Import via ID
@@ -116,7 +116,7 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	}()
 
 	ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "Create")
+	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "Create")
 
 	var timeout timeouts.Value
 	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("timeouts"), &timeout)...)
@@ -136,15 +136,9 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	mc := modelconv.NewModelConv(r.GetModelConvOption())
 
 	// Build the resource id
-	var name, parentId string
-	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("name"), &name)...)
-	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("parent_id"), &parentId)...)
+	id, diags := ResourceIdFromPlan(ctx, req.Plan, r.AzureResourceType())
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-	id, err := parse.NewResourceID(name, parentId, r.AzureResourceType())
-	if err != nil {
-		resp.Diagnostics.AddError("failed to new resource id", err.Error())
 		return
 	}
 	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "id", id.ID())
@@ -158,7 +152,7 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	// Existence Check
 	{
 		r.Info(ctx, "Start to check the existence of the resource")
-		if _, err = r.meta.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.DefaultRequestOptions()); err != nil {
+		if _, err := r.meta.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.DefaultRequestOptions()); err != nil {
 			if !utils.ResponseErrorWasNotFound(err) {
 				resp.Diagnostics.AddError("failed to check the existence of the resource", err.Error())
 				return
@@ -193,14 +187,16 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 
 	// (optional) PostCreate
 	if rr, ok := r.Resource.(ResourceWithPostCreate); ok {
-		resp.Diagnostics.Append(rr.PostCreate(ctx, req)...)
+		r.Info(ctx, "Start to post-create the resource")
+		resp.Diagnostics.Append(rr.PostCreate(ctx, req, r.meta)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
+		r.Info(ctx, "Finish to post-create the resource")
 	}
 
 	// Read the resource
-	resp.Diagnostics.Append(r.read(ctx, id, &resp.State)...)
+	resp.Diagnostics.Append(r.read(ctx, *id, &resp.State)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -252,7 +248,7 @@ func (r resourceWrapper) Read(ctx context.Context, req resource.ReadRequest, res
 	}()
 
 	ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "Read")
+	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "Read")
 
 	var timeout timeouts.Value
 	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("timeouts"), &timeout)...)
@@ -270,20 +266,15 @@ func (r resourceWrapper) Read(ctx context.Context, req resource.ReadRequest, res
 	defer cancel()
 
 	// Build the resource id
-	var idstr string
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("id"), &idstr)...)
+	id, diags := ResourceIdFromState(ctx, req.State)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-	id, err := parse.ResourceID(idstr)
-	if err != nil {
-		resp.Diagnostics.AddError(fmt.Sprintf("failed to parse resource id %q", idstr), err.Error())
 		return
 	}
 	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "id", id.ID())
 
 	// Read the resource
-	if diags := r.read(ctx, id, &resp.State); diags.HasError() {
+	if diags := r.read(ctx, *id, &resp.State); diags.HasError() {
 		if errs := diags.Errors(); len(errs) == 1 && errs[0] == DiagResourceNotFound {
 			r.Warn(ctx, "resource is not found, remove the resource from the state")
 			resp.State.RemoveResource(ctx)
@@ -313,7 +304,7 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 	}()
 
 	ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "Update")
+	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "Update")
 
 	var timeout timeouts.Value
 	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("timeouts"), &timeout)...)
@@ -333,17 +324,12 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 	mc := modelconv.NewModelConv(r.GetModelConvOption())
 
 	// Build the resource id
-	var name, parentId string
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("name"), &name)...)
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("parent_id"), &parentId)...)
+	id, diags := ResourceIdFromState(ctx, req.State)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	id, err := parse.NewResourceID(name, parentId, r.AzureResourceType())
-	if err != nil {
-		resp.Diagnostics.AddError("failed to new resource id", err.Error())
-		return
-	}
+
 	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "id", id.ID())
 
 	plan, diags := modelconv.ObjectFromRaw(ctx, r.GetSchema(ctx).Type(), req.Plan.Raw)
@@ -375,14 +361,16 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 
 	// (optional) PostUpdate
 	if rr, ok := r.Resource.(ResourceWithPostUpdate); ok {
-		resp.Diagnostics.Append(rr.PostUpdate(ctx, req)...)
+		r.Info(ctx, "Start to post-update the resource")
+		resp.Diagnostics.Append(rr.PostUpdate(ctx, req, r.meta)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
+		r.Info(ctx, "Finish to post-update the resource")
 	}
 
 	// Read the resource
-	resp.Diagnostics.Append(r.read(ctx, id, &resp.State)...)
+	resp.Diagnostics.Append(r.read(ctx, *id, &resp.State)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -402,7 +390,7 @@ func (r resourceWrapper) Delete(ctx context.Context, req resource.DeleteRequest,
 	}()
 
 	ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "Delete")
+	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "Delete")
 
 	var timeout timeouts.Value
 	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("timeouts"), &timeout)...)
@@ -420,15 +408,9 @@ func (r resourceWrapper) Delete(ctx context.Context, req resource.DeleteRequest,
 	defer cancel()
 
 	// Build the resource id
-	var name, parentId string
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("name"), &name)...)
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("parent_id"), &parentId)...)
+	id, diags := ResourceIdFromState(ctx, req.State)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-	id, err := parse.NewResourceID(name, parentId, r.AzureResourceType())
-	if err != nil {
-		resp.Diagnostics.AddError("failed to new resource id", err.Error())
 		return
 	}
 	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "id", id.ID())
@@ -449,10 +431,12 @@ func (r resourceWrapper) Delete(ctx context.Context, req resource.DeleteRequest,
 
 	// (optional) PostDelete
 	if rr, ok := r.Resource.(ResourceWithPostDelete); ok {
-		resp.Diagnostics.Append(rr.PostDelete(ctx, req)...)
+		r.Info(ctx, "Start to post-delete the resource")
+		resp.Diagnostics.Append(rr.PostDelete(ctx, req, r.meta)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
+		r.Info(ctx, "Finish to post-delete the resource")
 	}
 }
 
@@ -462,7 +446,7 @@ func (r *resourceWrapper) Configure(ctx context.Context, req resource.ConfigureR
 	}()
 
 	ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "Configure")
+	ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "Configure")
 
 	if req.ProviderData == nil {
 		return
@@ -480,7 +464,7 @@ func (r *resourceWrapper) Configure(ctx context.Context, req resource.ConfigureR
 func (r resourceWrapper) ConfigValidators(ctx context.Context) []resource.ConfigValidator {
 	if rr, ok := r.Resource.(ResourceWithConfigValidators); ok {
 		ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "ConfigValidators")
+		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "ConfigValidators")
 
 		return rr.ConfigValidators(ctx)
 	}
@@ -494,7 +478,7 @@ func (r resourceWrapper) ModifyPlan(ctx context.Context, req resource.ModifyPlan
 			r.logDiags(ctx, resp.Diagnostics)
 		}()
 		ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "ModifyPlan")
+		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "ModifyPlan")
 
 		rr.ModifyPlan(ctx, req, resp)
 		return
@@ -505,7 +489,7 @@ func (r resourceWrapper) ModifyPlan(ctx context.Context, req resource.ModifyPlan
 func (r resourceWrapper) MoveState(ctx context.Context) []resource.StateMover {
 	if rr, ok := r.Resource.(ResourceWithMoveState); ok {
 		ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "MoveState")
+		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "MoveState")
 
 		return rr.MoveState(ctx)
 	}
@@ -517,7 +501,7 @@ func (r resourceWrapper) UpgradeState(ctx context.Context) map[int64]resource.St
 
 	if rr, ok := r.Resource.(ResourceWithUpgradeState); ok {
 		ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "UpgradeState")
+		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "UpgradeState")
 
 		return rr.UpgradeState(ctx)
 	}
@@ -532,7 +516,7 @@ func (r resourceWrapper) ValidateConfig(ctx context.Context, req resource.Valida
 		}()
 
 		ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "ValidateConfig")
+		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "ValidateConfig")
 
 		rr.ValidateConfig(ctx, req, resp)
 		return
@@ -543,7 +527,7 @@ func (r resourceWrapper) ValidateConfig(ctx context.Context, req resource.Valida
 func (r resourceWrapper) UpgradeIdentity(ctx context.Context) map[int64]resource.IdentityUpgrader {
 	if rr, ok := r.Resource.(ResourceWithUpgradeIdentity); ok {
 		ctx = tflog.NewSubsystem(ctx, r.TFResourceType())
-		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "operation", "UpgradeIdentity")
+		ctx = tflog.SubsystemSetField(ctx, r.TFResourceType(), "stage", "UpgradeIdentity")
 
 		return rr.UpgradeIdentity(ctx)
 	}
@@ -558,7 +542,7 @@ func (r resourceWrapper) UpgradeIdentity(ctx context.Context) map[int64]resource
 // 	}()
 //
 // 	ctx = tflog.NewSubsystem(ctx, r.Resource.TFResourceType())
-// 	ctx = tflog.SubsystemSetField(ctx, r.Resource.TFResourceType(), "operation", "IdentitySchema")
+// 	ctx = tflog.SubsystemSetField(ctx, r.Resource.TFResourceType(), "stage", "IdentitySchema")
 //
 //  //TODO
 //
