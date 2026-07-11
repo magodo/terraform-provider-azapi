@@ -56,5 +56,6 @@ The plan is to keep the customization at the post-codegen phase while with hint 
 -[ ] Codegen
 -[ ] Framework: Update check HasChanged for each root level attribute.
 -[ ] Framework: Support identity
--[ ] Framework: More behavior extension via implementing additional interfaces
+-[ ] Framework: Support write-only attribute handling
+-[X] Framework: More behavior extension via implementing additional interfaces
 -[ ] Framework: Support data source
