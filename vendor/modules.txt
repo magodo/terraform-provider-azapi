@@ -37,6 +37,9 @@ github.com/Azure/azure-sdk-for-go/sdk/internal/log
 github.com/Azure/azure-sdk-for-go/sdk/internal/poller
 github.com/Azure/azure-sdk-for-go/sdk/internal/temporal
 github.com/Azure/azure-sdk-for-go/sdk/internal/uuid
+# github.com/Azure/bicep-types/src/bicep-types-go v0.0.0-20260712201737-acea21464c6a
+## explicit; go 1.21
+github.com/Azure/bicep-types/src/bicep-types-go/types
 # github.com/Azure/entrauth v0.0.0-20260702010043-480422e02b6c
 ## explicit; go 1.24.1
 github.com/Azure/entrauth

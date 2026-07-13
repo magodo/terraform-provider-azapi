@@ -8,6 +8,8 @@ github.com/Azure/azure-sdk-for-go/sdk/azidentity/cache v0.4.0 h1:xFaZZ+IubdftrDH
 github.com/Azure/azure-sdk-for-go/sdk/azidentity/cache v0.4.0/go.mod h1:mCBhUhlMjLLJKr5aqw2TNS/VqJOie8MzWq3DAMJeKso=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 h1:fhqpLE3UEXi9lPaBRpQ6XuRW0nU7hgg4zlmZZa+a9q4=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0/go.mod h1:7dCRMLwisfRH3dBupKeNCioWYUZ4SS09Z14H+7i8ZoY=
+github.com/Azure/bicep-types/src/bicep-types-go v0.0.0-20260712201737-acea21464c6a h1:nNq5yAUC0W2kpH1XzTmIUkUytp8KmtBjryMnWFG8cBg=
+github.com/Azure/bicep-types/src/bicep-types-go v0.0.0-20260712201737-acea21464c6a/go.mod h1:Bk9rIa7p8ROWO4hK+qs5RacRf6tbU8/divPJ7PMUsyI=
 github.com/Azure/entrauth v0.0.0-20260702010043-480422e02b6c h1:yua6QV20UwzTG4tsE73VSCvJaCI8trx45JmxXWpjXIQ=
 github.com/Azure/entrauth v0.0.0-20260702010043-480422e02b6c/go.mod h1:BQkRmV6UcT8b1AQoYayaJYHHxm8nSGze8410pEoCi4k=
 github.com/AzureAD/microsoft-authentication-extensions-for-go/cache v0.1.1 h1:WJTmL004Abzc5wDB5VtZG2PJk5ndYDgVacGqfirKxjM=
