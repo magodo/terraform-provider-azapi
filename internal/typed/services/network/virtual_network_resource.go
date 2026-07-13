@@ -32,6 +32,7 @@ func NewAzApiVirtualNetworkResource() AzApiVirtualNetworkResource {
 
 				servicehooks.RenameSchemaAttribute(s, "properties.private_endpoint_vnet_policies", "private_endpoint_vnet_policy")
 				servicehooks.UpdateSchemaAttribute(s, "properties.private_endpoint_vnet_policy", func(a schema.StringAttribute) schema.StringAttribute {
+					a.Computed = true
 					a.Validators = []validator.String{
 						stringvalidator.OneOf("Basic", "Disabled"),
 					}

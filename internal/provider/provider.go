@@ -22,6 +22,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/framework"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/services/network"
+	"github.com/Azure/terraform-provider-azapi/internal/typed/services/storage"
 	"github.com/Azure/terraform-provider-azapi/version"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -767,6 +768,12 @@ func (p Provider) DataSources(ctx context.Context) []func() datasource.DataSourc
 func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		framework.WrapResource(network.NewAzApiVirtualNetworkResource(), framework.ResourceOption{}),
+		framework.WrapResource(storage.NewAzApiStorageAccountBlobServiceResource(),
+			framework.ResourceOption{
+				SkipExistenceCheck: true,
+				DeleteNoop:         true,
+			},
+		),
 		func() resource.Resource {
 			return &services.AzapiResource{}
 		},
