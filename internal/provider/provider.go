@@ -766,7 +766,7 @@ func (p Provider) DataSources(ctx context.Context) []func() datasource.DataSourc
 
 func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		framework.WrapResource(network.NewAzApiVirtualNetworkResource()),
+		framework.WrapResource(network.NewAzApiVirtualNetworkResource(), framework.ResourceOption{}),
 		func() resource.Resource {
 			return &services.AzapiResource{}
 		},

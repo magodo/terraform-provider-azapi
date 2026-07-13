@@ -36,12 +36,29 @@ var _ tffwdocs.ResourceWithRenderOption = &resourceWrapper{}
 
 type resourceWrapper struct {
 	Resource
+
 	meta Meta
+	opt  ResourceOption
 }
 
-func WrapResource(in Resource) func() resource.Resource {
+type ResourceOption struct {
+	// SkipExistenceCheck skips the existence check in the Create().
+	// This is useful for resource types whose lifecycle is bound to another (master) resource.
+	// E.g. storage blob service.
+	SkipExistenceCheck bool
+
+	// DeleteNoop makes the Delete() directly return without invoking the actual DELETE API.
+	// This is useful for resource types whose lifecycle is bound to another (master) resource.
+	// E.g. storage blob service.
+	DeleteNoop bool
+}
+
+func WrapResource(in Resource, opt ResourceOption) func() resource.Resource {
 	return func() resource.Resource {
-		return &resourceWrapper{Resource: in}
+		return &resourceWrapper{
+			Resource: in,
+			opt:      opt,
+		}
 	}
 }
 
@@ -149,8 +166,8 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	// Existence Check
-	{
+	// (optional) Existence Check
+	if !r.opt.SkipExistenceCheck {
 		r.Info(ctx, "Start to check the existence of the resource")
 		if _, err := r.meta.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.DefaultRequestOptions()); err != nil {
 			if !utils.ResponseErrorWasNotFound(err) {
@@ -406,6 +423,12 @@ func (r resourceWrapper) Delete(ctx context.Context, req resource.DeleteRequest,
 
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
+
+	// (optional) Noop, early return
+	if r.opt.DeleteNoop {
+		r.Info(ctx, "Noop, early return")
+		return
+	}
 
 	// Build the resource id
 	id, diags := ResourceIdFromState(ctx, req.State)
