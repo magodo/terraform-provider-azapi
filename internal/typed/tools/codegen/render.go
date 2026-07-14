@@ -18,10 +18,6 @@ type importSet struct {
 	m map[string]string
 }
 
-func newImportSet() *importSet {
-	return &importSet{m: map[string]string{}}
-}
-
 func (s *importSet) add(path, alias string) {
 	if _, ok := s.m[path]; ok {
 		return
@@ -55,19 +51,19 @@ func (s *importSet) render() string {
 
 // serviceName derives the service/package name from the resource type, e.g.
 // "Microsoft.Network/virtualNetworks" -> "network".
-func (g *generator) serviceName() string {
-	namespace, _, _ := strings.Cut(g.resourceType, "/")
+func (g *resourceGenerator) serviceName() string {
+	namespace, _, _ := strings.Cut(g.apiResourceType, "/")
 	segs := strings.Split(namespace, ".")
 	return strings.ToLower(segs[len(segs)-1])
 }
 
 // fileBaseName strips the "azapi_" prefix from the TF type.
-func (g *generator) fileBaseName() string {
+func (g *resourceGenerator) fileBaseName() string {
 	return strings.TrimPrefix(g.tfType, "azapi_")
 }
 
 // structName produces e.g. "AzApiVirtualNetworkResource".
-func (g *generator) structName() string {
+func (g *resourceGenerator) structName() string {
 	return "AzApi" + pascalCase(g.fileBaseName()) + "Resource"
 }
 
@@ -87,16 +83,6 @@ func pascalCase(snake string) string {
 // special (fixed) attributes
 // -----------------------------------------------------------------------------
 
-func specialNameAttribute() string {
-	return `"name": schema.StringAttribute{
-Required: true,
-PlanModifiers: []planmodifier.String{
-stringplanmodifier.RequiresReplace(),
-},
-},
-`
-}
-
 func specialParentIDAttribute() string {
 	return `"parent_id": schema.StringAttribute{
 Required: true,
@@ -105,6 +91,16 @@ stringplanmodifier.RequiresReplace(),
 },
 Validators: []validator.String{
 myvalidator.StringIsResourceID(),
+},
+},
+`
+}
+
+func specialNameAttribute() string {
+	return `"name": schema.StringAttribute{
+Required: true,
+PlanModifiers: []planmodifier.String{
+stringplanmodifier.RequiresReplace(),
 },
 },
 `
@@ -144,7 +140,7 @@ Delete: true,
 // file assembly
 // -----------------------------------------------------------------------------
 
-func (g *generator) renderFile(attrs string, res *types.ResourceType) ([]byte, error) {
+func (g *resourceGenerator) renderFile(attrs string, res *types.ResourceType) ([]byte, error) {
 	// Base imports that are always needed.
 	g.imports.add("context", "")
 	g.imports.add("github.com/Azure/terraform-provider-azapi/internal/services/myvalidator", "")
@@ -168,7 +164,7 @@ func (g *generator) renderFile(attrs string, res *types.ResourceType) ([]byte, e
 	fmt.Fprintf(&b, "type %s struct {\n\thooks servicehooks.ResourceHooks\n}\n\n", structName)
 	fmt.Fprintf(&b, "var _ framework.Resource = %s{}\n\n", structName)
 
-	fmt.Fprintf(&b, "func (r %s) AzureResourceType() string {\n\treturn %q\n}\n\n", structName, g.apiType)
+	fmt.Fprintf(&b, "func (r %s) AzureResourceType() string {\n\treturn \"%s@%s\"\n}\n\n", structName, g.apiResourceType, g.apiVersion)
 	fmt.Fprintf(&b, "func (r %s) TFResourceType() string {\n\treturn %q\n}\n\n", structName, g.tfType)
 
 	// GetSchema
@@ -196,7 +192,7 @@ func (g *generator) renderFile(attrs string, res *types.ResourceType) ([]byte, e
 	return src, nil
 }
 
-func (g *generator) renderModelConvOption() string {
+func (g *resourceGenerator) renderModelConvOption() string {
 	if len(g.nameOverrides) == 0 {
 		return "opt := &modelconv.Option{}\n"
 	}
@@ -219,8 +215,8 @@ func (g *generator) renderModelConvOption() string {
 // example resource id
 // -----------------------------------------------------------------------------
 
-func (g *generator) exampleResourceID(res *types.ResourceType) string {
-	namespace, rest, _ := strings.Cut(g.resourceType, "/")
+func (g *resourceGenerator) exampleResourceID(res *types.ResourceType) string {
+	namespace, rest, _ := strings.Cut(g.apiResourceType, "/")
 	typeSegs := strings.Split(rest, "/")
 
 	var b strings.Builder

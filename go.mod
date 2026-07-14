@@ -116,3 +116,5 @@ require (
 )
 
 go 1.26.0
+
+replace github.com/Azure/bicep-types/src/bicep-types-go => github.com/magodo/bicep-types/src/bicep-types-go v0.0.0-20260714045538-b3581fc9e1d3
