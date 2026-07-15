@@ -78,6 +78,35 @@ func RenameSchemaAttribute(s schema.Schema, path string, newName string) {
 	}
 }
 
+// RemoveSchemaAttribute walks the given dotted path in the schema and removes
+// the target attribute (the last segment of the path) from its parent
+// attributes map.
+func RemoveSchemaAttribute(s schema.Schema, path string) {
+	parts := strings.Split(path, ".")
+	if len(parts) == 0 {
+		panic("RemoveSchemaAttribute: empty path")
+	}
+
+	attrs := s.Attributes
+	for i, p := range parts {
+		attr, ok := attrs[p]
+		if !ok {
+			panic(fmt.Sprintf("RemoveSchemaAttribute: attribute %q not found at segment %d of %q", p, i, path))
+		}
+		if i == len(parts)-1 {
+			// Attributes maps in nested attributes are reference types shared
+			// with the parent schema, so mutating at the leaf is sufficient.
+			delete(attrs, p)
+			return
+		}
+		next := nestedAttributes(attr)
+		if next == nil {
+			panic(fmt.Sprintf("RemoveSchemaAttribute: attribute at segment %q (%T) is not a nested attribute", p, attr))
+		}
+		attrs = next
+	}
+}
+
 func nestedAttributes(a schema.Attribute) map[string]schema.Attribute {
 	switch v := a.(type) {
 	case schema.SingleNestedAttribute:
