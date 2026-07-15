@@ -307,8 +307,8 @@ func (r resourceWrapper) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), state.Attributes()["name"])...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("parent_id"), state.Attributes()["parent_id"])...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), id.Name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("parent_id"), id.ParentId)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("timeouts"), state.Attributes()["timeouts"])...)
 	if resp.Diagnostics.HasError() {
 		return
