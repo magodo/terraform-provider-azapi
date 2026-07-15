@@ -172,12 +172,12 @@ func (g *resourceGenerator) renderFile(attrs string, res *types.ResourceType) ([
 	b.WriteString("schema := schema.Schema{\nAttributes: map[string]schema.Attribute{\n")
 	b.WriteString(attrs)
 	b.WriteString("},\n}\n")
-	b.WriteString("if r.hooks.SchemaHook != nil {\nschema = r.hooks.SchemaHook(schema)\n}\nreturn schema\n}\n\n")
+	b.WriteString("if r.hooks.SchemaHook != nil {\nschema = r.hooks.SchemaHook(ctx, schema)\n}\nreturn schema\n}\n\n")
 
 	// GetModelConvOption
-	fmt.Fprintf(&b, "func (r %s) GetModelConvOption() *modelconv.Option {\n", structName)
+	fmt.Fprintf(&b, "func (r %s) GetModelConvOption(ctx context.Context) *modelconv.Option {\n", structName)
 	b.WriteString(g.renderModelConvOption())
-	b.WriteString("if r.hooks.ModelConvOptionHook != nil {\nopt = r.hooks.ModelConvOptionHook(opt)\n}\nreturn &opt\n}\n\n")
+	b.WriteString("if r.hooks.ModelConvOptionHook != nil {\nopt = r.hooks.ModelConvOptionHook(ctx, opt)\n}\nreturn &opt\n}\n\n")
 
 	// RenderOption
 	fmt.Fprintf(&b, "func (r %s) RenderOption() tffwdocs.ResourceRenderOption {\n", structName)

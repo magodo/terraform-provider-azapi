@@ -256,10 +256,6 @@ func (r AzApiStorageAccountResource) GetSchema(ctx context.Context) schema.Schem
 												Optional:            true,
 												MarkdownDescription: "Encryption key type to be used for the encryption service. 'Account' key type implies that an account-scoped encryption key will be used. 'Service' key type implies that a default service key is used.",
 											},
-											"last_enabled_time": schema.StringAttribute{
-												Computed:            true,
-												MarkdownDescription: "Gets a rough estimate of the date/time when the encryption was last enabled by the user. Data is encrypted at rest by default today and cannot be disabled.",
-											},
 										},
 									},
 									"file": schema.SingleNestedAttribute{
@@ -273,10 +269,6 @@ func (r AzApiStorageAccountResource) GetSchema(ctx context.Context) schema.Schem
 											"key_type": schema.StringAttribute{
 												Optional:            true,
 												MarkdownDescription: "Encryption key type to be used for the encryption service. 'Account' key type implies that an account-scoped encryption key will be used. 'Service' key type implies that a default service key is used.",
-											},
-											"last_enabled_time": schema.StringAttribute{
-												Computed:            true,
-												MarkdownDescription: "Gets a rough estimate of the date/time when the encryption was last enabled by the user. Data is encrypted at rest by default today and cannot be disabled.",
 											},
 										},
 									},
@@ -292,10 +284,6 @@ func (r AzApiStorageAccountResource) GetSchema(ctx context.Context) schema.Schem
 												Optional:            true,
 												MarkdownDescription: "Encryption key type to be used for the encryption service. 'Account' key type implies that an account-scoped encryption key will be used. 'Service' key type implies that a default service key is used.",
 											},
-											"last_enabled_time": schema.StringAttribute{
-												Computed:            true,
-												MarkdownDescription: "Gets a rough estimate of the date/time when the encryption was last enabled by the user. Data is encrypted at rest by default today and cannot be disabled.",
-											},
 										},
 									},
 									"table": schema.SingleNestedAttribute{
@@ -309,10 +297,6 @@ func (r AzApiStorageAccountResource) GetSchema(ctx context.Context) schema.Schem
 											"key_type": schema.StringAttribute{
 												Optional:            true,
 												MarkdownDescription: "Encryption key type to be used for the encryption service. 'Account' key type implies that an account-scoped encryption key will be used. 'Service' key type implies that a default service key is used.",
-											},
-											"last_enabled_time": schema.StringAttribute{
-												Computed:            true,
-												MarkdownDescription: "Gets a rough estimate of the date/time when the encryption was last enabled by the user. Data is encrypted at rest by default today and cannot be disabled.",
 											},
 										},
 									},
@@ -1121,15 +1105,15 @@ func (r AzApiStorageAccountResource) GetSchema(ctx context.Context) schema.Schem
 		},
 	}
 	if r.hooks.SchemaHook != nil {
-		schema = r.hooks.SchemaHook(schema)
+		schema = r.hooks.SchemaHook(ctx, schema)
 	}
 	return schema
 }
 
-func (r AzApiStorageAccountResource) GetModelConvOption() *modelconv.Option {
+func (r AzApiStorageAccountResource) GetModelConvOption(ctx context.Context) *modelconv.Option {
 	opt := modelconv.NewDefaultOption()
 	if r.hooks.ModelConvOptionHook != nil {
-		opt = r.hooks.ModelConvOptionHook(opt)
+		opt = r.hooks.ModelConvOptionHook(ctx, opt)
 	}
 	return &opt
 }

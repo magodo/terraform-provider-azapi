@@ -24,7 +24,7 @@ type Resource interface {
 	GetSchema(context.Context) schema.Schema
 
 	// GetModelConvOption returns the modelconv.Option
-	GetModelConvOption() *modelconv.Option
+	GetModelConvOption(context.Context) *modelconv.Option
 
 	// ResourceWithRenderOption implements the interface to generate document.
 	RenderOption() tffwdocs.ResourceRenderOption

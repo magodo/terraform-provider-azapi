@@ -244,15 +244,15 @@ func (r AzApiStorageAccountBlobServiceResource) GetSchema(ctx context.Context) s
 		},
 	}
 	if r.hooks.SchemaHook != nil {
-		schema = r.hooks.SchemaHook(schema)
+		schema = r.hooks.SchemaHook(ctx, schema)
 	}
 	return schema
 }
 
-func (r AzApiStorageAccountBlobServiceResource) GetModelConvOption() *modelconv.Option {
+func (r AzApiStorageAccountBlobServiceResource) GetModelConvOption(ctx context.Context) *modelconv.Option {
 	opt := modelconv.NewDefaultOption()
 	if r.hooks.ModelConvOptionHook != nil {
-		opt = r.hooks.ModelConvOptionHook(opt)
+		opt = r.hooks.ModelConvOptionHook(ctx, opt)
 	}
 	return &opt
 }

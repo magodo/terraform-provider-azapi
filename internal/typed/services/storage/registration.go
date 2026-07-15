@@ -5,7 +5,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 )
 
-//go:generate go run ../../tools/codegen resource --api-type "Microsoft.Storage/storageAccounts@2025-06-01" --tf-type "azapi_storage_account" --remove-attr properties.privateEndpointConnections --add-attr properties.privateEndpointConnections.*.id
+//go:generate go run ../../tools/codegen resource --api-type "Microsoft.Storage/storageAccounts@2025-06-01" --tf-type "azapi_storage_account" --remove-attr properties.privateEndpointConnections --add-attr properties.privateEndpointConnections.*.id --remove-attr properties.encryption.services.blob.lastEnabledTime --remove-attr properties.encryption.services.table.lastEnabledTime --remove-attr properties.encryption.services.queue.lastEnabledTime --remove-attr properties.encryption.services.file.lastEnabledTime
 //go:generate go run ../../tools/codegen resource --api-type "Microsoft.Storage/storageAccounts/blobServices@2025-06-01" --tf-type "azapi_storage_account_blob_service"
 
 func Resources() []func() resource.Resource {

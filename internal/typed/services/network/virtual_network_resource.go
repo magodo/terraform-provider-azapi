@@ -18,11 +18,11 @@ import (
 func NewAzApiVirtualNetworkResource() AzApiVirtualNetworkResource {
 	return AzApiVirtualNetworkResource{
 		hooks: servicehooks.ResourceHooks{
-			ModelConvOptionHook: func(o modelconv.Option) modelconv.Option {
+			ModelConvOptionHook: func(ctx context.Context, o modelconv.Option) modelconv.Option {
 				o.NameOverrides["properties.privateEndpointVNetPolicies"] = "private_endpoint_vnet_policies"
 				return o
 			},
-			SchemaHook: func(s schema.Schema) schema.Schema {
+			SchemaHook: func(ctx context.Context, s schema.Schema) schema.Schema {
 				servicehooks.UpdateSchemaAttribute(s, "properties.address_space.address_prefixes", func(a schema.ListAttribute) schema.ListAttribute {
 					a.Validators = []validator.List{
 						listvalidator.SizeAtLeast(1),

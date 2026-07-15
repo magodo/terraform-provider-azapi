@@ -1,7 +1,8 @@
 package storage
 
 import (
-	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
+	"context"
+
 	"github.com/Azure/terraform-provider-azapi/internal/typed/servicehooks"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 )
@@ -9,10 +10,7 @@ import (
 func NewAzApiStorageAccountBlobServiceResource() AzApiStorageAccountBlobServiceResource {
 	return AzApiStorageAccountBlobServiceResource{
 		hooks: servicehooks.ResourceHooks{
-			ModelConvOptionHook: func(o modelconv.Option) modelconv.Option {
-				return o
-			},
-			SchemaHook: func(s schema.Schema) schema.Schema {
+			SchemaHook: func(ctx context.Context, s schema.Schema) schema.Schema {
 				// Remove this since it is deprecated
 				servicehooks.RemoveSchemaAttribute(s, "properties.restore_policy.last_enabled_time")
 				return s

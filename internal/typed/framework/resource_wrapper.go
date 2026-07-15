@@ -150,7 +150,7 @@ func (r resourceWrapper) Create(ctx context.Context, req resource.CreateRequest,
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 
-	mc := modelconv.NewModelConv(r.GetModelConvOption())
+	mc := modelconv.NewModelConv(r.GetModelConvOption(ctx))
 
 	// Build the resource id
 	id, diags := ResourceIdFromPlan(ctx, req.Plan, r.AzureResourceType())
@@ -232,7 +232,7 @@ func (r resourceWrapper) read(ctx context.Context, id parse.ResourceId, state *t
 	r.Info(ctx, "Start to read the resource")
 	defer r.Info(ctx, "Finish to read the resource")
 
-	mc := modelconv.NewModelConv(r.GetModelConvOption())
+	mc := modelconv.NewModelConv(r.GetModelConvOption(ctx))
 
 	apiRespAny, err := r.meta.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.DefaultRequestOptions())
 	if err != nil {
@@ -338,7 +338,7 @@ func (r resourceWrapper) Update(ctx context.Context, req resource.UpdateRequest,
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 
-	mc := modelconv.NewModelConv(r.GetModelConvOption())
+	mc := modelconv.NewModelConv(r.GetModelConvOption(ctx))
 
 	// Build the resource id
 	id, diags := ResourceIdFromState(ctx, req.State)

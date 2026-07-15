@@ -207,15 +207,15 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 		},
 	}
 	if r.hooks.SchemaHook != nil {
-		schema = r.hooks.SchemaHook(schema)
+		schema = r.hooks.SchemaHook(ctx, schema)
 	}
 	return schema
 }
 
-func (r AzApiVirtualNetworkResource) GetModelConvOption() *modelconv.Option {
+func (r AzApiVirtualNetworkResource) GetModelConvOption(ctx context.Context) *modelconv.Option {
 	opt := modelconv.NewDefaultOption()
 	if r.hooks.ModelConvOptionHook != nil {
-		opt = r.hooks.ModelConvOptionHook(opt)
+		opt = r.hooks.ModelConvOptionHook(ctx, opt)
 	}
 	return &opt
 }
