@@ -51,6 +51,21 @@ The plan is to keep the customization at the post-codegen phase while with hint 
 - Customize the override mapping if the smart version is still not correct.
 - The expand/flatten pick up the override map.
 
+# API returns default value
+
+It is common in Azure that if the request doesn't specify an attribute, the API still returns a default value.
+
+For primary type, you have multiple choices:
+
+- Marking the attribute O+C. This will not only succeed the first apply, it will also make the second plan show no diff as long as there is no "legit" diff, otherwise, this attribute will be shown as `(known after apply)` unless you also set the plan modifier to use state for null.
+- Adding a default value in the schema (not necessarily have to be the same value as what the API returns). Though you still need to mark it as O+C.
+
+For complex type, e.g. NestedAttribute, simply marking as O+C is not enough. The second plan will always show a diff (worse even the diff doesn't give you a clear indication of the cause). You can eliminate this by several ways:
+
+- During Read() flatten, set null for the attribute on *default* value. This is suboptimal since this then will raise a diff if the user explicitly set the *default* value in the config.
+- If all the child attributes are non-required, you can recursively set all the O attributes to be O+C. This stops working when at least one required attribute is there.
+- Set a default value for this attribute (can be a complex object). This is what I prefer right now given the clean implementation and intention.
+
 # TODO
 
 -[ ] Codegen
@@ -59,3 +74,4 @@ The plan is to keep the customization at the post-codegen phase while with hint 
 -[ ] Framework: Support write-only attribute handling
 -[X] Framework: More behavior extension via implementing additional interfaces
 -[ ] Framework: Support data source
+-[ ] Support bicep polymorphic models
