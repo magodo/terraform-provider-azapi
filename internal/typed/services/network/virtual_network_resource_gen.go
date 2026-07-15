@@ -54,7 +54,7 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 				},
 			},
 			"properties": schema.SingleNestedAttribute{
-				Optional:            true,
+				Required:            true,
 				MarkdownDescription: "Properties of the virtual network.",
 				Attributes: map[string]schema.Attribute{
 					"address_space": schema.SingleNestedAttribute{
@@ -176,7 +176,7 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 						MarkdownDescription: "A reference to the default public nat gateway being used by this virtual network resource.",
 						Attributes: map[string]schema.Attribute{
 							"id": schema.StringAttribute{
-								Optional:            true,
+								Computed:            true,
 								MarkdownDescription: "Resource ID.",
 							},
 						},

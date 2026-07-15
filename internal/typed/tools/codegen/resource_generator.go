@@ -37,6 +37,13 @@ type resourceGenerator struct {
 	// visiting tracks bicep types currently in the render stack so we can break
 	// self-referential cycles (e.g. Subnet.ipConfigurations[*].subnet -> Subnet).
 	visiting map[typeKey]bool
+
+	// computedDepth is > 0 while we are rendering the subtree of an attribute
+	// that is Computed-only (ReadOnly, not Required). Every descendant in such
+	// a subtree is forced to Computed-only as well, regardless of its own
+	// bicep flags. This avoids leaking configurable-looking children from a
+	// shared model that happens to be referenced from a Computed context.
+	computedDepth int
 }
 
 // attrRule is a single --remove-attr / --add-attr rule. path uses camelCase
@@ -84,6 +91,7 @@ func NewResourceGenerator(apiType, tfType string, rules []attrRule) (*resourceGe
 //   - P is a proper ancestor of some --add-attr rule A whose own effective
 //     status (recursively) is include -- so that intermediate nodes are
 //     traversed to reach the re-included descendant.
+//
 // includePath reports whether the attribute at the given API path should be
 // rendered, given the ordered --remove-attr / --add-attr rules.
 //
@@ -165,6 +173,7 @@ var skipTopLevel = map[string]bool{
 var alwaysIgnoreAttributes = map[string]bool{
 	"etag":              true,
 	"provisioningState": true,
+	"systemData":        true,
 }
 
 // attrMode categorises an attribute for ordering purposes.
@@ -242,6 +251,13 @@ func (g *resourceGenerator) Generate() ([]byte, error) {
 		apiPath := []string{name}
 		if !g.includePath(apiPath) {
 			continue
+		}
+		// Force the top-level "properties" attribute to always be Required.
+		// The ARM body's "properties" wrapper is where the meaningful,
+		// user-configurable resource fields live, so it should never be
+		// optional/computed in the generated schema.
+		if name == "properties" {
+			prop.Flags = (prop.Flags &^ types.TypePropertyFlagsReadOnly) | types.TypePropertyFlagsRequired
 		}
 		tfName := g.tfName(apiPath)
 		code, comment, err := g.renderAttribute(bodyFile, prop, apiPath)
@@ -322,6 +338,14 @@ func (g *resourceGenerator) renderAttribute(file string, prop types.ObjectTypePr
 	}
 	mode := modeLine(prop.Flags)
 	desc := descLine(prop.Description)
+
+	// If this attribute is Computed-only, anything rendered underneath it must
+	// also be Computed-only. Track this via computedDepth; renderChildren
+	// consults it and rewrites each child's flags accordingly.
+	if modeOf(prop.Flags) == modeComputed {
+		g.computedDepth++
+		defer func() { g.computedDepth-- }()
+	}
 
 	switch tt := t.(type) {
 	case *types.StringType:
@@ -638,6 +662,14 @@ func (g *resourceGenerator) renderChildren(file string, ot *types.ObjectType, ca
 		childPath := append(slices.Clone(camelPath), name)
 		if !g.includePath(childPath) {
 			continue
+		}
+		// Under a Computed-only ancestor, force every descendant to be
+		// Computed-only regardless of its own bicep flags. This handles
+		// shared models that are reused between configurable and Computed
+		// contexts (e.g. a status/props sub-object referenced from a
+		// read-only parent).
+		if g.computedDepth > 0 {
+			prop.Flags = types.TypePropertyFlagsReadOnly
 		}
 		tfName := g.tfName(childPath)
 		code, comment, err := g.renderAttribute(file, prop, childPath)
