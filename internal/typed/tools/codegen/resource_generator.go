@@ -22,6 +22,11 @@ type resourceGenerator struct {
 	apiVersion      string // "2025-01-01"
 	tfType          string // "azapi_virtual_network"
 
+	// rules are the ordered --remove-attr / --add-attr filters (in the order
+	// they appeared on the command line). Later rules override earlier ones
+	// for overlapping paths. See includePath for details.
+	rules []attrRule
+
 	// nameOverrides records API(camel) path -> TF(snake) name, only when the
 	// naive snake conversion differs from the smart one (so expand/flatten can
 	// reverse the mapping).
@@ -34,7 +39,15 @@ type resourceGenerator struct {
 	visiting map[typeKey]bool
 }
 
-func NewResourceGenerator(apiType, tfType string) (*resourceGenerator, error) {
+// attrRule is a single --remove-attr / --add-attr rule. path uses camelCase
+// API segments and includes a literal "*" segment for every array/map
+// element boundary (matching how apiPath is constructed during rendering).
+type attrRule struct {
+	path    []string
+	include bool // true for --add-attr, false for --remove-attr
+}
+
+func NewResourceGenerator(apiType, tfType string, rules []attrRule) (*resourceGenerator, error) {
 	apiResourceType, apiVersion, ok := strings.Cut(apiType, "@")
 	if !ok {
 		return nil, fmt.Errorf("invalid api type %q, expected format <ApiResourceType>@<ApiVersion>", apiType)
@@ -47,12 +60,81 @@ func NewResourceGenerator(apiType, tfType string) (*resourceGenerator, error) {
 		apiResourceType: apiResourceType,
 		apiVersion:      apiVersion,
 		tfType:          tfType,
+		rules:           rules,
 		nameOverrides:   map[string]string{},
 		imports: &importSet{
 			m: map[string]string{},
 		},
 		visiting: map[typeKey]bool{},
 	}, nil
+}
+
+// includePath reports whether the attribute at the given API path should be
+// rendered, given the ordered --remove-attr / --add-attr rules.
+//
+// Semantics: wildcard ("*") segments in apiPath (representing array/map
+// element boundaries) are transparent when matching against rule paths.
+// Rules are applied in the order they appeared on the command line; later
+// rules override earlier ones for overlapping paths.
+//
+// For a path P, its "effective status" is determined by the last rule whose
+// path is a prefix of P (or the default "include" if no such rule exists).
+// P is rendered iff:
+//   - its effective status is include, OR
+//   - P is a proper ancestor of some --add-attr rule A whose own effective
+//     status (recursively) is include -- so that intermediate nodes are
+//     traversed to reach the re-included descendant.
+// includePath reports whether the attribute at the given API path should be
+// rendered, given the ordered --remove-attr / --add-attr rules.
+//
+// Rule paths must include a literal "*" segment for every array/map element
+// boundary in the API path, matching exactly how apiPath is constructed.
+// Rules are applied in the order they appeared on the command line; a later
+// rule overrides earlier ones for overlapping paths.
+//
+// For a path P, its "effective status" is determined by the last rule whose
+// path is a prefix of P (default: include). P is rendered iff:
+//   - its effective status is include, OR
+//   - P is a proper ancestor of some --add-attr rule A whose own effective
+//     status is include -- so intermediate nodes are traversed to reach the
+//     re-included descendant.
+func (g *resourceGenerator) includePath(apiPath []string) bool {
+	if g.statusOf(apiPath) {
+		return true
+	}
+	// apiPath is excluded at its own level. Include as pass-through iff some
+	// later add-rule descendant is itself still effectively included.
+	for _, r := range g.rules {
+		if !r.include {
+			continue
+		}
+		if len(r.path) <= len(apiPath) {
+			continue
+		}
+		if !slices.Equal(r.path[:len(apiPath)], apiPath) {
+			continue
+		}
+		if g.statusOf(r.path) {
+			return true
+		}
+	}
+	return false
+}
+
+// statusOf returns the effective include/exclude status of path, i.e. the
+// kind of the last rule whose path is a prefix of it. Defaults to include.
+func (g *resourceGenerator) statusOf(path []string) bool {
+	include := true
+	for _, r := range g.rules {
+		if len(r.path) > len(path) {
+			continue
+		}
+		if !slices.Equal(r.path, path[:len(r.path)]) {
+			continue
+		}
+		include = r.include
+	}
+	return include
 }
 
 type typeKey struct {
@@ -91,9 +173,10 @@ func modeOf(flags types.TypePropertyFlags) attrMode {
 }
 
 type attrEntry struct {
-	tfName string
-	code   string
-	mode   attrMode
+	tfName  string
+	code    string
+	comment string
+	mode    attrMode
 }
 
 func (g *resourceGenerator) Generate() ([]byte, error) {
@@ -142,12 +225,15 @@ func (g *resourceGenerator) Generate() ([]byte, error) {
 			continue
 		}
 		apiPath := []string{name}
+		if !g.includePath(apiPath) {
+			continue
+		}
 		tfName := g.tfName(apiPath)
-		code, err := g.renderAttribute(bodyFile, prop, apiPath)
+		code, comment, err := g.renderAttribute(bodyFile, prop, apiPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to render attribute %q: %w", name, err)
 		}
-		entry := attrEntry{tfName: tfName, code: code, mode: modeOf(prop.Flags)}
+		entry := attrEntry{tfName: tfName, code: code, comment: comment, mode: modeOf(prop.Flags)}
 		switch entry.mode {
 		case modeRequired:
 			required = append(required, entry)
@@ -174,6 +260,9 @@ func (g *resourceGenerator) Generate() ([]byte, error) {
 	}
 	writeEntries := func(entries []attrEntry) {
 		for _, a := range entries {
+			if a.comment != "" {
+				fmt.Fprintf(&b, "// %s\n", a.comment)
+			}
 			fmt.Fprintf(&b, "%q: %s,\n", a.tfName, a.code)
 		}
 	}
@@ -209,15 +298,16 @@ func (g *resourceGenerator) tfName(camelPath []string) string {
 // renderAttribute renders a schema.Attribute value for the given property.
 // apiPath is the full API (camelCase) path to this property, including its own
 // name as the last element ("*" is used for array element boundaries).
-func (g *resourceGenerator) renderAttribute(file string, prop types.ObjectTypeProperty, apiPath []string) (string, error) {
+// The returned comment, when non-empty, explains why a DynamicAttribute was
+// emitted and should be placed on the line above the attribute key/value pair.
+func (g *resourceGenerator) renderAttribute(file string, prop types.ObjectTypeProperty, apiPath []string) (code, comment string, err error) {
 	t, tfile, tref, err := g.loader.Resolve(file, prop.Type)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	mode := modeLine(prop.Flags)
 	desc := descLine(prop.Description)
 
-	var code string
 	switch tt := t.(type) {
 	case *types.StringType:
 		code = g.renderString(mode, desc, tt)
@@ -232,15 +322,19 @@ func (g *resourceGenerator) renderAttribute(file string, prop types.ObjectTypePr
 		code, ok = g.renderUnionAsStringish(tfile, mode, desc, tt)
 		if !ok {
 			log.Printf("[WARN] Unexpected union type of non-stringish variants in file %q: %v", tfile, apiPath)
+			comment = "dynamic: union type with non-stringish variants"
 			code = "schema.DynamicAttribute{\n" + mode + desc + "}"
 		}
 	case *types.AnyType:
+		comment = "dynamic: bicep any type"
 		code = "schema.DynamicAttribute{\n" + mode + desc + "}"
 	case *types.BuiltInType:
 		// There is no BuiltInType in the bicep generated types any more.
 		log.Printf("[WARN] Unexpected BuiltInType found in file %q: %v", file, apiPath)
+		comment = "dynamic: unexpected BuiltInType"
+		code = "schema.DynamicAttribute{\n" + mode + desc + "}"
 	case *types.ObjectType:
-		code, err = g.renderObject(tfile, tref, mode, desc, tt, apiPath)
+		code, comment, err = g.renderObject(tfile, tref, mode, desc, tt, apiPath)
 	case *types.ArrayType:
 		code, err = g.renderArray(tfile, mode, desc, tt, apiPath)
 	case *types.DiscriminatedObjectType:
@@ -248,12 +342,13 @@ func (g *resourceGenerator) renderAttribute(file string, prop types.ObjectTypePr
 		panic(fmt.Sprintf("DiscriminatedObjectType not supported: %s at %s", file, apiPath))
 	default:
 		log.Printf("[WARN] Unexpected type %T found in file %q: %v", tt, file, apiPath)
+		comment = fmt.Sprintf("dynamic: unexpected type %T", tt)
 		code = "schema.DynamicAttribute{\n" + mode + desc + "}"
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return code, nil
+	return code, comment, nil
 }
 
 func (g *resourceGenerator) renderStringLiteral(mode, desc string, st *types.StringLiteralType) string {
@@ -375,7 +470,7 @@ func (g *resourceGenerator) unionStrings(file string, ut *types.UnionType) (lite
 	return literals, stringish
 }
 
-func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string, ot *types.ObjectType, camelPath []string) (string, error) {
+func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string, ot *types.ObjectType, camelPath []string) (code, comment string, err error) {
 	var sens string
 	if ot.Sensitive != nil && *ot.Sensitive {
 		sens = "Sensitive: true,\n"
@@ -384,7 +479,7 @@ func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string
 	key := typeKey{file: file, ref: ref}
 	if g.visiting[key] {
 		// Self-referential type. Emit a dynamic attribute to break the cycle.
-		return "schema.DynamicAttribute{\n" + mode + desc + sens + "}", nil
+		return "schema.DynamicAttribute{\n" + mode + desc + sens + "}", "dynamic: self-referential object type", nil
 	}
 	g.visiting[key] = true
 	defer delete(g.visiting, key)
@@ -393,7 +488,7 @@ func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string
 	if len(ot.Properties) == 0 && ot.AdditionalProperties != nil {
 		elemT, elemFile, elemRef, err := g.loader.Resolve(file, ot.AdditionalProperties)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if eo, ok := elemT.(*types.ObjectType); ok && len(eo.Properties) > 0 {
 			// Guard the element too.
@@ -403,7 +498,7 @@ func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string
 				defer delete(g.visiting, ekey)
 				children, err := g.renderChildren(elemFile, eo, append(slices.Clone(camelPath), "*"))
 				if err != nil {
-					return "", err
+					return "", "", err
 				}
 				var b strings.Builder
 				b.WriteString("schema.MapNestedAttribute{\n")
@@ -413,12 +508,12 @@ func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string
 				b.WriteString("NestedObject: schema.NestedAttributeObject{\nAttributes: map[string]schema.Attribute{\n")
 				b.WriteString(children)
 				b.WriteString("},\n},\n}")
-				return b.String(), nil
+				return b.String(), "", nil
 			}
 		}
 		elemType, err := g.attrType(elemFile, elemT)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		var b strings.Builder
 		b.WriteString("schema.MapAttribute{\n")
@@ -427,17 +522,17 @@ func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string
 		b.WriteString(desc)
 		b.WriteString(sens)
 		b.WriteString("}")
-		return b.String(), nil
+		return b.String(), "", nil
 	}
 
 	// Plain object with no properties at all -> dynamic.
 	if len(ot.Properties) == 0 {
-		return "schema.DynamicAttribute{\n" + mode + desc + sens + "}", nil
+		return "schema.DynamicAttribute{\n" + mode + desc + sens + "}", "dynamic: object type with no properties", nil
 	}
 
 	children, err := g.renderChildren(file, ot, camelPath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var b strings.Builder
 	b.WriteString("schema.SingleNestedAttribute{\n")
@@ -447,7 +542,7 @@ func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string
 	b.WriteString("Attributes: map[string]schema.Attribute{\n")
 	b.WriteString(children)
 	b.WriteString("},\n}")
-	return b.String(), nil
+	return b.String(), "", nil
 }
 
 func (g *resourceGenerator) renderArray(file, mode, desc string, at *types.ArrayType, camelPath []string) (string, error) {
@@ -526,12 +621,15 @@ func (g *resourceGenerator) renderChildren(file string, ot *types.ObjectType, ca
 	var required, optional, computed []attrEntry
 	for name, prop := range ot.Properties {
 		childPath := append(slices.Clone(camelPath), name)
+		if !g.includePath(childPath) {
+			continue
+		}
 		tfName := g.tfName(childPath)
-		code, err := g.renderAttribute(file, prop, childPath)
+		code, comment, err := g.renderAttribute(file, prop, childPath)
 		if err != nil {
 			return "", err
 		}
-		entry := attrEntry{tfName: tfName, code: code, mode: modeOf(prop.Flags)}
+		entry := attrEntry{tfName: tfName, code: code, comment: comment, mode: modeOf(prop.Flags)}
 		switch entry.mode {
 		case modeRequired:
 			required = append(required, entry)
@@ -551,6 +649,9 @@ func (g *resourceGenerator) renderChildren(file string, ot *types.ObjectType, ca
 	var b strings.Builder
 	for _, group := range [][]attrEntry{required, optional, computed} {
 		for _, e := range group {
+			if e.comment != "" {
+				fmt.Fprintf(&b, "// %s\n", e.comment)
+			}
 			fmt.Fprintf(&b, "%q: %s,\n", e.tfName, e.code)
 		}
 	}
