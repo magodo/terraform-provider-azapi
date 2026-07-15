@@ -90,7 +90,7 @@ func runResource(args []string) error {
 	fs := flag.NewFlagSet("resource", flag.ExitOnError)
 	apiType := fs.String("api-type", "", `the Azure resource type in the form "<ResourceType>@<ApiVersion>", e.g. "Microsoft.Network/virtualNetworks@2025-01-01"`)
 	tfType := fs.String("tf-type", "", `the terraform resource type, e.g. "azapi_virtual_network"`)
-	output := fs.String("output", "", "output directory (defaults to internal/typed/services/<service>)")
+	output := fs.String("output", "", "output directory (defaults to cwd)")
 	stdout := fs.Bool("stdout", false, "write the generated code to stdout instead of a file")
 	var rules []attrRule
 	fs.Var(ruleFlag{list: &rules, include: false}, "remove-attr", "dot-separated API path to prune from the schema (repeatable; order-sensitive with --add-attr)")
@@ -123,7 +123,8 @@ func runResource(args []string) error {
 
 	dir := *output
 	if dir == "" {
-		dir = filepath.Join("internal", "typed", "services", g.serviceName())
+		cwd, _ := os.Getwd()
+		dir = cwd
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory %q: %w", dir, err)

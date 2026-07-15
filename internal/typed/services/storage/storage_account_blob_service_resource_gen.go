@@ -136,11 +136,11 @@ func (r AzApiStorageAccountBlobServiceResource) GetSchema(ctx context.Context) s
 }
 
 func (r AzApiStorageAccountBlobServiceResource) GetModelConvOption() *modelconv.Option {
-	opt := &modelconv.Option{}
+	opt := modelconv.NewDefaultOption()
 	if r.hooks.ModelConvOptionHook != nil {
 		opt = r.hooks.ModelConvOptionHook(opt)
 	}
-	return opt
+	return &opt
 }
 
 func (r AzApiStorageAccountBlobServiceResource) RenderOption() tffwdocs.ResourceRenderOption {

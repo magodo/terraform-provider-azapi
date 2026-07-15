@@ -11,7 +11,7 @@ type ResourceHooks struct {
 	SchemaHook func(schema.Schema) schema.Schema
 
 	// ModelConvOptionHook patches the modelconv.Option
-	ModelConvOptionHook func(*modelconv.Option) *modelconv.Option
+	ModelConvOptionHook func(modelconv.Option) modelconv.Option
 
 	// RenderOptionHook patches the tffwdocs.ResourceRenderOption
 	RenderOptionHook func(tffwdocs.ResourceRenderOption) tffwdocs.ResourceRenderOption

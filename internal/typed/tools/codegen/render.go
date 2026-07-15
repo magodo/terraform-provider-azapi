@@ -177,7 +177,7 @@ func (g *resourceGenerator) renderFile(attrs string, res *types.ResourceType) ([
 	// GetModelConvOption
 	fmt.Fprintf(&b, "func (r %s) GetModelConvOption() *modelconv.Option {\n", structName)
 	b.WriteString(g.renderModelConvOption())
-	b.WriteString("if r.hooks.ModelConvOptionHook != nil {\nopt = r.hooks.ModelConvOptionHook(opt)\n}\nreturn opt\n}\n\n")
+	b.WriteString("if r.hooks.ModelConvOptionHook != nil {\nopt = r.hooks.ModelConvOptionHook(opt)\n}\nreturn &opt\n}\n\n")
 
 	// RenderOption
 	fmt.Fprintf(&b, "func (r %s) RenderOption() tffwdocs.ResourceRenderOption {\n", structName)
@@ -194,7 +194,7 @@ func (g *resourceGenerator) renderFile(attrs string, res *types.ResourceType) ([
 
 func (g *resourceGenerator) renderModelConvOption() string {
 	if len(g.nameOverrides) == 0 {
-		return "opt := &modelconv.Option{}\n"
+		return "opt := modelconv.NewDefaultOption()\n"
 	}
 	keys := make([]string, 0, len(g.nameOverrides))
 	for k := range g.nameOverrides {

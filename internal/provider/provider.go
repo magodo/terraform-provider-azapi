@@ -20,7 +20,6 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services"
 	"github.com/Azure/terraform-provider-azapi/internal/services/functions"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
-	"github.com/Azure/terraform-provider-azapi/internal/typed/framework"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/services/network"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/services/storage"
 	"github.com/Azure/terraform-provider-azapi/version"
@@ -766,14 +765,7 @@ func (p Provider) DataSources(ctx context.Context) []func() datasource.DataSourc
 }
 
 func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
-	return []func() resource.Resource{
-		framework.WrapResource(network.NewAzApiVirtualNetworkResource(), framework.ResourceOption{}),
-		framework.WrapResource(storage.NewAzApiStorageAccountBlobServiceResource(),
-			framework.ResourceOption{
-				SkipExistenceCheck: true,
-				DeleteNoop:         true,
-			},
-		),
+	resources := []func() resource.Resource{
 		func() resource.Resource {
 			return &services.AzapiResource{}
 		},
@@ -787,6 +779,17 @@ func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
 			return &services.DataPlaneResource{}
 		},
 	}
+
+	registrations := []func() []func() resource.Resource{
+		network.Resources,
+		storage.Resources,
+	}
+
+	for _, reg := range registrations {
+		resources = append(resources, reg()...)
+	}
+
+	return resources
 }
 
 func (p Provider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {

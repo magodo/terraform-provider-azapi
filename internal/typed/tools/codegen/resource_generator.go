@@ -99,6 +99,13 @@ func NewResourceGenerator(apiType, tfType string, rules []attrRule) (*resourceGe
 //     status is include -- so intermediate nodes are traversed to reach the
 //     re-included descendant.
 func (g *resourceGenerator) includePath(apiPath []string) bool {
+	// Always ignore certain attributes at any nesting level. These are Azure
+	// system-managed fields that should never surface in the Terraform schema.
+	if len(apiPath) > 0 {
+		if alwaysIgnoreAttributes[apiPath[len(apiPath)-1]] {
+			return false
+		}
+	}
 	if g.statusOf(apiPath) {
 		return true
 	}
@@ -150,6 +157,14 @@ var skipTopLevel = map[string]bool{
 	"name":       true, // rendered as the fixed "name" attribute
 	"id":         true, // rendered as the fixed "id" attribute
 	"location":   true, // rendered as the fixed "location" attribute (when present)
+}
+
+// alwaysIgnoreAttributes lists API (camelCase) property names that are
+// unconditionally excluded from the generated schema at any nesting level.
+// Extend this map to skip additional attributes globally.
+var alwaysIgnoreAttributes = map[string]bool{
+	"etag":              true,
+	"provisioningState": true,
 }
 
 // attrMode categorises an attribute for ordering purposes.
