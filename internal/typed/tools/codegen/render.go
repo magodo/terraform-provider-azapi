@@ -9,6 +9,10 @@ import (
 	"github.com/Azure/bicep-types/src/bicep-types-go/types"
 )
 
+// render.go implements the RENDER phase of the codegen pipeline: it walks the
+// schema IR (see ir.go) and emits formatted Go source. It contains no bicep
+// logic; that is the job of the BUILD phase (see resource_generator.go).
+
 // -----------------------------------------------------------------------------
 // import set
 // -----------------------------------------------------------------------------
@@ -111,64 +115,276 @@ func pascalCase(snake string) string {
 // special (fixed) attributes
 // -----------------------------------------------------------------------------
 
-func specialParentIDAttribute() string {
-	return `"parent_id": schema.StringAttribute{
-Required: true,
-PlanModifiers: []planmodifier.String{
-stringplanmodifier.RequiresReplace(),
-},
-Validators: []validator.String{
-myvalidator.StringIsResourceID(),
-},
-},
-`
+// The special attributes are the fixed, hand-authored parts of every generated
+// resource schema. They are modelled as ordinary IR so that the render phase
+// handles them uniformly with the bicep-derived attributes.
+
+func specialParentID() *Attribute {
+	return &Attribute{Name: "parent_id", Type: StringAttr{
+		Mode:          Required,
+		PlanModifiers: []StringPlanModifier{RequiresReplace{}},
+		Validators:    []StringValidator{StringIsResourceID{}},
+	}}
 }
 
-func specialNameAttribute() string {
-	return `"name": schema.StringAttribute{
-Required: true,
-PlanModifiers: []planmodifier.String{
-stringplanmodifier.RequiresReplace(),
-},
-},
-`
+func specialName() *Attribute {
+	return &Attribute{Name: "name", Type: StringAttr{
+		Mode:          Required,
+		PlanModifiers: []StringPlanModifier{RequiresReplace{}},
+	}}
 }
 
-func specialLocationAttribute() string {
-	return `"location": schema.StringAttribute{
-Required: true,
-PlanModifiers: []planmodifier.String{
-stringplanmodifier.RequiresReplace(),
-},
-},
-`
+func specialLocation() *Attribute {
+	return &Attribute{Name: "location", Type: StringAttr{
+		Mode:          Required,
+		PlanModifiers: []StringPlanModifier{RequiresReplace{}},
+	}}
 }
 
-func specialIDAttribute() string {
-	return `"id": schema.StringAttribute{
-Computed: true,
-PlanModifiers: []planmodifier.String{
-stringplanmodifier.UseStateForUnknown(),
-},
-},
-`
+func specialID() *Attribute {
+	return &Attribute{Name: "id", Type: StringAttr{
+		Mode:          Computed,
+		PlanModifiers: []StringPlanModifier{UseStateForUnknown{}},
+	}}
 }
 
-func specialTimeoutsAttribute() string {
-	return `"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
+func specialTimeouts() *Attribute {
+	return &Attribute{Name: "timeouts", Type: RawAttr{Code: `timeouts.Attributes(ctx, timeouts.Opts{
 Create: true,
 Read:   true,
 Update: true,
 Delete: true,
-}),
-`
+})`}}
+}
+
+// -----------------------------------------------------------------------------
+// IR rendering
+// -----------------------------------------------------------------------------
+
+// renderAttributes renders an ordered list of attributes as the body of an
+// attributes map: an optional leading comment followed by `"name": <value>,`.
+func (g *resourceGenerator) renderAttributes(attrs []*Attribute) string {
+	var b strings.Builder
+	for _, a := range attrs {
+		if a.Comment != "" {
+			fmt.Fprintf(&b, "// %s\n", a.Comment)
+		}
+		fmt.Fprintf(&b, "%q: %s,\n", a.Name, g.renderAttributeType(a.Type))
+	}
+	return b.String()
+}
+
+func (g *resourceGenerator) renderAttributeType(t AttributeType) string {
+	switch a := t.(type) {
+	case StringAttr:
+		return g.renderStringAttr(a)
+	case BoolAttr:
+		return "schema.BoolAttribute{\n" + behaviorLine(a.Mode) + descLine(a.Description) + sensitiveLine(a.Sensitive) + "}"
+	case Int64Attr:
+		return "schema.Int64Attribute{\n" + behaviorLine(a.Mode) + descLine(a.Description) + g.renderInt64Validators(a.Validators) + "}"
+	case DynamicAttr:
+		return "schema.DynamicAttribute{\n" + behaviorLine(a.Mode) + descLine(a.Description) + sensitiveLine(a.Sensitive) + "}"
+	case SingleNestedAttr:
+		return "schema.SingleNestedAttribute{\n" + behaviorLine(a.Mode) + descLine(a.Description) + sensitiveLine(a.Sensitive) +
+			"Attributes: map[string]schema.Attribute{\n" + g.renderAttributes(a.Attributes) + "},\n}"
+	case ListNestedAttr:
+		return "schema.ListNestedAttribute{\n" + behaviorLine(a.Mode) + descLine(a.Description) + g.renderListValidators(a.Validators) +
+			"NestedObject: schema.NestedAttributeObject{\nAttributes: map[string]schema.Attribute{\n" + g.renderAttributes(a.Attributes) + "},\n},\n}"
+	case MapNestedAttr:
+		return "schema.MapNestedAttribute{\n" + behaviorLine(a.Mode) + descLine(a.Description) + sensitiveLine(a.Sensitive) +
+			"NestedObject: schema.NestedAttributeObject{\nAttributes: map[string]schema.Attribute{\n" + g.renderAttributes(a.Attributes) + "},\n},\n}"
+	case ListAttr:
+		return "schema.ListAttribute{\n" + behaviorLine(a.Mode) +
+			fmt.Sprintf("ElementType: %s,\n", g.renderElemType(a.ElementType)) +
+			descLine(a.Description) + g.renderListValidators(a.Validators) + "}"
+	case MapAttr:
+		return "schema.MapAttribute{\n" + behaviorLine(a.Mode) +
+			fmt.Sprintf("ElementType: %s,\n", g.renderElemType(a.ElementType)) +
+			descLine(a.Description) + sensitiveLine(a.Sensitive) + "}"
+	case RawAttr:
+		return a.Code
+	default:
+		panic(fmt.Sprintf("unknown attribute type %T", t))
+	}
+}
+
+func (g *resourceGenerator) renderStringAttr(a StringAttr) string {
+	var b strings.Builder
+	b.WriteString("schema.StringAttribute{\n")
+	b.WriteString(behaviorLine(a.Mode))
+	b.WriteString(descLine(a.Description))
+	b.WriteString(sensitiveLine(a.Sensitive))
+	if len(a.PlanModifiers) > 0 {
+		b.WriteString("PlanModifiers: []planmodifier.String{\n")
+		for _, pm := range a.PlanModifiers {
+			b.WriteString(g.renderStringPlanModifier(pm) + "\n")
+		}
+		b.WriteString("},\n")
+	}
+	if len(a.Validators) > 0 {
+		b.WriteString("Validators: []validator.String{\n")
+		for _, v := range a.Validators {
+			b.WriteString(g.renderStringValidator(v) + "\n")
+		}
+		b.WriteString("},\n")
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func (g *resourceGenerator) renderStringValidator(v StringValidator) string {
+	switch vv := v.(type) {
+	case OneOf:
+		g.goImports.add(importStringValidator)
+		quoted := make([]string, len(vv.Values))
+		for i, s := range vv.Values {
+			quoted[i] = fmt.Sprintf("%q", s)
+		}
+		return fmt.Sprintf("stringvalidator.OneOf(%s),", strings.Join(quoted, ", "))
+	case RegexMatches:
+		g.goImports.add(importStringValidator)
+		g.goImports.add(importRegexp)
+		return fmt.Sprintf("stringvalidator.RegexMatches(regexp.MustCompile(%q), \"\"),", vv.Pattern)
+	case LengthBetween:
+		g.goImports.add(importStringValidator)
+		return fmt.Sprintf("stringvalidator.LengthBetween(%d, %d),", vv.Min, vv.Max)
+	case LengthAtLeast:
+		g.goImports.add(importStringValidator)
+		return fmt.Sprintf("stringvalidator.LengthAtLeast(%d),", vv.Min)
+	case LengthAtMost:
+		g.goImports.add(importStringValidator)
+		return fmt.Sprintf("stringvalidator.LengthAtMost(%d),", vv.Max)
+	case StringIsResourceID:
+		g.goImports.add(importMyValidator)
+		return "myvalidator.StringIsResourceID(),"
+	default:
+		panic(fmt.Sprintf("unknown string validator %T", v))
+	}
+}
+
+func (g *resourceGenerator) renderInt64Validators(vs []Int64Validator) string {
+	if len(vs) == 0 {
+		return ""
+	}
+	g.goImports.add(importInt64Validator)
+	var b strings.Builder
+	b.WriteString("Validators: []validator.Int64{\n")
+	for _, v := range vs {
+		switch vv := v.(type) {
+		case IntBetween:
+			fmt.Fprintf(&b, "int64validator.Between(%d, %d),\n", vv.Min, vv.Max)
+		case IntAtLeast:
+			fmt.Fprintf(&b, "int64validator.AtLeast(%d),\n", vv.Min)
+		case IntAtMost:
+			fmt.Fprintf(&b, "int64validator.AtMost(%d),\n", vv.Max)
+		default:
+			panic(fmt.Sprintf("unknown int64 validator %T", v))
+		}
+	}
+	b.WriteString("},\n")
+	return b.String()
+}
+
+func (g *resourceGenerator) renderListValidators(vs []ListValidator) string {
+	if len(vs) == 0 {
+		return ""
+	}
+	g.goImports.add(importListValidator)
+	var b strings.Builder
+	b.WriteString("Validators: []validator.List{\n")
+	for _, v := range vs {
+		switch vv := v.(type) {
+		case SizeBetween:
+			fmt.Fprintf(&b, "listvalidator.SizeBetween(%d, %d),\n", vv.Min, vv.Max)
+		case SizeAtLeast:
+			fmt.Fprintf(&b, "listvalidator.SizeAtLeast(%d),\n", vv.Min)
+		case SizeAtMost:
+			fmt.Fprintf(&b, "listvalidator.SizeAtMost(%d),\n", vv.Max)
+		default:
+			panic(fmt.Sprintf("unknown list validator %T", v))
+		}
+	}
+	b.WriteString("},\n")
+	return b.String()
+}
+
+func (g *resourceGenerator) renderStringPlanModifier(pm StringPlanModifier) string {
+	switch pm.(type) {
+	case RequiresReplace:
+		return "stringplanmodifier.RequiresReplace(),"
+	case UseStateForUnknown:
+		return "stringplanmodifier.UseStateForUnknown(),"
+	default:
+		panic(fmt.Sprintf("unknown string plan modifier %T", pm))
+	}
+}
+
+func (g *resourceGenerator) renderElemType(e ElemType) string {
+	g.goImports.add(importFrameworkTypes)
+	switch et := e.(type) {
+	case StringElem:
+		return "types.StringType"
+	case Int64Elem:
+		return "types.Int64Type"
+	case BoolElem:
+		return "types.BoolType"
+	case DynamicElem:
+		return "types.DynamicType"
+	case ListElem:
+		return fmt.Sprintf("types.ListType{ElemType: %s}", g.renderElemType(et.Elem))
+	case MapElem:
+		return fmt.Sprintf("types.MapType{ElemType: %s}", g.renderElemType(et.Elem))
+	case ObjectElem:
+		g.goImports.add(importAttr)
+		var b strings.Builder
+		b.WriteString("types.ObjectType{AttrTypes: map[string]attr.Type{\n")
+		for _, a := range et.Attributes {
+			fmt.Fprintf(&b, "%q: %s,\n", a.Name, g.renderElemType(a.Type))
+		}
+		b.WriteString("}}")
+		return b.String()
+	default:
+		panic(fmt.Sprintf("unknown elem type %T", e))
+	}
+}
+
+func behaviorLine(b Mode) string {
+	switch b {
+	case Required:
+		return "Required: true,\n"
+	case Computed:
+		return "Computed: true,\n"
+	case Optional:
+		return "Optional: true,\n"
+	default:
+		panic("unreachable behaviorLine")
+	}
+}
+
+func descLine(desc string) string {
+	if desc == "" {
+		return ""
+	}
+	return fmt.Sprintf("MarkdownDescription: %q,\n", desc)
+}
+
+func sensitiveLine(sensitive bool) string {
+	if !sensitive {
+		return ""
+	}
+	return "Sensitive: true,\n"
 }
 
 // -----------------------------------------------------------------------------
 // file assembly
 // -----------------------------------------------------------------------------
 
-func (g *resourceGenerator) renderFile(attrs string, res *types.ResourceType) ([]byte, error) {
+func (g *resourceGenerator) renderFile(schema *Schema, res *types.ResourceType) ([]byte, error) {
+	// Render the attributes first: this populates the dynamic imports (via the
+	// g.goImports.add calls in the render helpers) before the import block is
+	// emitted below.
+	attrs := g.renderAttributes(schema.Attributes)
+
 	for _, value := range []goImport{
 		importContext,
 		importMyValidator,

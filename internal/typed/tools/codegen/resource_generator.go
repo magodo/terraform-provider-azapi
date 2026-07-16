@@ -14,6 +14,10 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 )
 
+// resource_generator.go implements the BUILD phase of the codegen pipeline: it
+// walks the bicep types and produces the schema IR (see ir.go). It emits no Go
+// source; that is the job of the RENDER phase (see render.go).
+
 type resourceGenerator struct {
 	loader bicepTypeLoader
 
@@ -29,12 +33,6 @@ type resourceGenerator struct {
 	goImports *GoImportSet
 
 	visiting map[bicepTypeKey]bool
-
-	// computedDepth is > 0 while we are rendering the subtree of an attribute
-	// that is Computed-only (ReadOnly, not Required).
-	// Every descendant in such a subtree is forced to Computed-only as well,
-	// regardless of its own bicep flags.
-	computedDepth int
 }
 
 type attrRule struct {
@@ -96,86 +94,77 @@ func (g *resourceGenerator) includePath(apiPath []string) bool {
 	return include
 }
 
-// attrMode categorises an attribute for ordering purposes.
-type attrMode int
-
-const (
-	modeRequired attrMode = iota
-	modeOptional          // Optional, with or without Computed
-	modeComputed
-)
-
-func modeOf(flags types.TypePropertyFlags) attrMode {
+// modeof categorises a property by its bicep flags.
+func modeof(flags types.TypePropertyFlags) Mode {
 	switch {
 	case flags&types.TypePropertyFlagsRequired != 0:
-		return modeRequired
+		return Required
 	case flags&types.TypePropertyFlagsReadOnly != 0:
-		return modeComputed
+		return Computed
 	default:
-		return modeOptional
+		return Optional
 	}
 }
 
-type attrEntry struct {
-	tfName  string
-	code    string
-	comment string
-	mode    attrMode
-}
-
+// attributeContext is the input to buildAttribute: an unresolved property at a
+// given API path.
 type attributeContext struct {
 	file     string
 	property types.ObjectTypeProperty
 	apiPath  []string
+	// computed reports whether this attribute lives under a Computed-only
+	// ancestor. When true, the attribute (and everything below it) is forced
+	// to Computed-only regardless of its own bicep flags. This is control-flow
+	// state that flows down the traversal, not generator-wide state.
+	computed bool
 }
 
-type resolvedAttribute struct {
-	typeInfo bicepType
-	mode     string
-	desc     string
-	apiPath  []string
-}
-
-type renderedAttribute struct {
-	code    string
-	comment string
-}
-
+// Generate builds the schema IR and renders it to formatted Go source.
 func (g *resourceGenerator) Generate() ([]byte, error) {
+	schema, rt, err := g.build()
+	if err != nil {
+		return nil, err
+	}
+	return g.renderFile(schema, rt)
+}
+
+// build walks the bicep types and produces the schema IR together with the
+// resolved ResourceType (needed by the render phase for the example ID).
+func (g *resourceGenerator) build() (*Schema, *types.ResourceType, error) {
 	indexFile := "generated/index.json"
 
 	indexContent, err := azure.StaticFiles.ReadFile(indexFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load schema index: %w", err)
+		return nil, nil, fmt.Errorf("failed to load schema index: %w", err)
 	}
 	var idx index.TypeIndex
 	if err := json.Unmarshal(indexContent, &idx); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal schema index: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal schema index: %w", err)
 	}
 
 	ref, ok := idx.GetResource(g.apiResourceType, g.apiVersion)
 	if !ok {
-		return nil, fmt.Errorf("resource type %s@%s not found in the bicep index", g.apiResourceType, g.apiVersion)
+		return nil, nil, fmt.Errorf("resource type %s@%s not found in the bicep index", g.apiResourceType, g.apiVersion)
 	}
 
 	resourceType, err := g.loader.resolve(indexFile, ref)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rt, ok := resourceType.t.(*types.ResourceType)
 	if !ok {
-		return nil, fmt.Errorf("index entry for %s@%s is not a ResourceType (got %T)", g.apiResourceType, g.apiVersion, resourceType.t)
+		return nil, nil, fmt.Errorf("index entry for %s@%s is not a ResourceType (got %T)", g.apiResourceType, g.apiVersion, resourceType.t)
 	}
 
 	bodyType, err := g.loader.resolve(resourceType.key.file, rt.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve resource body: %w", err)
+		return nil, nil, fmt.Errorf("failed to resolve resource body: %w", err)
 	}
 	body, ok := bodyType.t.(*types.ObjectType)
 	if !ok {
-		return nil, fmt.Errorf("resource body is not an object type (got %T)", bodyType.t)
+		return nil, nil, fmt.Errorf("resource body is not an object type (got %T)", bodyType.t)
 	}
-	g.visiting = map[bicepTypeKey]bool{bodyType.key: true}
+	g.visiting[bodyType.key] = true
 
 	_, hasLocation := body.Properties["location"]
 
@@ -189,9 +178,9 @@ func (g *resourceGenerator) Generate() ([]byte, error) {
 		"location":   true, // rendered as the fixed "location" attribute (when present)
 	}
 
-	// Render the body-derived attributes (everything except the special ones),
-	// bucketed by mode so that we can emit them in the desired order.
-	var required, optional, computed []attrEntry
+	// Build the body-derived attributes (everything except the special ones),
+	// bucketed by behavior so that we can emit them in the desired order.
+	var required, optional, computed []*Attribute
 	for name, prop := range body.Properties {
 		if skipTopLevel[name] {
 			continue
@@ -207,51 +196,42 @@ func (g *resourceGenerator) Generate() ([]byte, error) {
 		if name == "properties" {
 			prop.Flags = (prop.Flags &^ types.TypePropertyFlagsReadOnly) | types.TypePropertyFlagsRequired
 		}
-		tfName := g.tfName(apiPath)
-		rendered, err := g.renderAttribute(attributeContext{file: bodyType.key.file, property: prop, apiPath: apiPath})
+		attrType, comment, err := g.buildAttribute(attributeContext{file: bodyType.key.file, property: prop, apiPath: apiPath})
 		if err != nil {
-			return nil, fmt.Errorf("failed to render attribute %q: %w", name, err)
+			return nil, nil, fmt.Errorf("failed to build attribute %q: %w", name, err)
 		}
-		entry := attrEntry{tfName: tfName, code: rendered.code, comment: rendered.comment, mode: modeOf(prop.Flags)}
-		switch entry.mode {
-		case modeRequired:
-			required = append(required, entry)
-		case modeOptional:
-			optional = append(optional, entry)
-		case modeComputed:
-			computed = append(computed, entry)
-		}
-	}
-	byTFName := func(s []attrEntry) {
-		sort.Slice(s, func(i, j int) bool { return s[i].tfName < s[j].tfName })
-	}
-	byTFName(required)
-	byTFName(optional)
-	byTFName(computed)
+		attr := &Attribute{Name: g.tfName(apiPath), Comment: comment, Type: attrType}
 
-	// Assemble the attributes map in the desired order:
+		switch modeof(prop.Flags) {
+		case Required:
+			required = append(required, attr)
+		case Optional:
+			optional = append(optional, attr)
+		case Computed:
+			computed = append(computed, attr)
+		}
+	}
+	sortByName(required)
+	sortByName(optional)
+	sortByName(computed)
+
+	// Assemble the attributes in the desired order:
 	//   parent_id, name, location?, <required>, <optional>, <computed>, id, timeouts
-	var b strings.Builder
-	b.WriteString(specialParentIDAttribute())
-	b.WriteString(specialNameAttribute())
+	schema := &Schema{}
+	schema.Attributes = append(schema.Attributes, specialParentID(), specialName())
 	if hasLocation {
-		b.WriteString(specialLocationAttribute())
+		schema.Attributes = append(schema.Attributes, specialLocation())
 	}
-	writeEntries := func(entries []attrEntry) {
-		for _, a := range entries {
-			if a.comment != "" {
-				fmt.Fprintf(&b, "// %s\n", a.comment)
-			}
-			fmt.Fprintf(&b, "%q: %s,\n", a.tfName, a.code)
-		}
-	}
-	writeEntries(required)
-	writeEntries(optional)
-	writeEntries(computed)
-	b.WriteString(specialIDAttribute())
-	b.WriteString(specialTimeoutsAttribute())
+	schema.Attributes = append(schema.Attributes, required...)
+	schema.Attributes = append(schema.Attributes, optional...)
+	schema.Attributes = append(schema.Attributes, computed...)
+	schema.Attributes = append(schema.Attributes, specialID(), specialTimeouts())
 
-	return g.renderFile(b.String(), rt)
+	return schema, rt, nil
+}
+
+func sortByName(s []*Attribute) {
+	sort.Slice(s, func(i, j int) bool { return s[i].Name < s[j].Name })
 }
 
 // -----------------------------------------------------------------------------
@@ -271,169 +251,106 @@ func (g *resourceGenerator) tfName(camelPath []string) string {
 }
 
 // -----------------------------------------------------------------------------
-// Attribute rendering
+// Attribute building (bicep property -> IR AttributeType)
 // -----------------------------------------------------------------------------
 
-// renderAttribute renders a schema.Attribute value for the given property.
+// buildAttribute builds the IR AttributeType for the given property, together
+// with an optional leading comment (used to explain dynamic fallbacks).
 // apiPath is the full API (camelCase) path to this property, including its own
 // name as the last element ("*" is used for array element boundaries).
-// The returned comment, when non-empty, explains why a DynamicAttribute was
-// emitted and should be placed on the line above the attribute key/value pair.
-func (g *resourceGenerator) renderAttribute(ctx attributeContext) (renderedAttribute, error) {
+func (g *resourceGenerator) buildAttribute(ctx attributeContext) (AttributeType, string, error) {
 	typeInfo, err := g.loader.resolve(ctx.file, ctx.property.Type)
 	if err != nil {
-		return renderedAttribute{}, err
+		return nil, "", err
 	}
-	resolved := resolvedAttribute{
-		typeInfo: typeInfo,
-		mode:     modeLine(ctx.property.Flags),
-		desc:     descLine(ctx.property.Description),
-		apiPath:  ctx.apiPath,
-	}
-	var result renderedAttribute
 
-	// If this attribute is Computed-only, anything rendered underneath it must
-	// also be Computed-only. Track this via computedDepth; renderChildren
-	// consults it and rewrites each child's flags accordingly.
-	if modeOf(ctx.property.Flags) == modeComputed {
-		g.computedDepth++
-		defer func() { g.computedDepth-- }()
-	}
+	mode := modeof(ctx.property.Flags)
+	desc := ctx.property.Description
+
+	// Whether the subtree rooted at this attribute must be Computed-only: it is
+	// so if some ancestor was Computed-only, or if this attribute itself is.
+	// buildChildren consults this to rewrite each child's flags accordingly.
+	computedSubtree := ctx.computed || mode == Computed
 
 	switch tt := typeInfo.t.(type) {
 	case *types.StringType:
-		result.code = g.renderString(resolved, tt)
+		return g.buildString(mode, desc, tt), "", nil
 	case *types.StringLiteralType:
-		result.code = g.renderStringLiteral(resolved, tt)
+		return StringAttr{
+			Mode:        mode,
+			Description: desc,
+			Sensitive:   tt.Sensitive,
+			Validators:  []StringValidator{OneOf{Values: []string{tt.Value}}},
+		}, "", nil
 	case *types.IntegerType:
-		result.code = g.renderInteger(resolved, tt)
+		return g.buildInteger(mode, desc, tt), "", nil
 	case *types.BooleanType:
-		result.code = "schema.BoolAttribute{\n" + resolved.mode + resolved.desc + "}"
+		return BoolAttr{Mode: mode, Description: desc}, "", nil
 	case *types.UnionType:
-		var ok bool
-		result.code, ok = g.renderUnionAsStringish(resolved, tt)
-		if !ok {
-			log.Printf("[WARN] Unexpected union type of non-stringish variants in file %q: %v", typeInfo.key.file, ctx.apiPath)
-			result.comment = "dynamic: union type with non-stringish variants"
-			result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
+		if attr, ok := g.buildUnionAsStringish(mode, desc, typeInfo, tt); ok {
+			return attr, "", nil
 		}
+		log.Printf("[WARN] Unexpected union type of non-stringish variants in file %q: %v", typeInfo.key.file, ctx.apiPath)
+		return DynamicAttr{Mode: mode, Description: desc}, "dynamic: union type with non-stringish variants", nil
 	case *types.AnyType:
-		result.comment = "dynamic: bicep any type"
-		result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
+		return DynamicAttr{Mode: mode, Description: desc}, "dynamic: bicep any type", nil
 	case *types.BuiltInType:
 		// There is no BuiltInType in the bicep generated types any more.
 		log.Printf("[WARN] Unexpected BuiltInType found in file %q: %v", ctx.file, ctx.apiPath)
-		result.comment = "dynamic: unexpected BuiltInType"
-		result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
+		return DynamicAttr{Mode: mode, Description: desc}, "dynamic: unexpected BuiltInType", nil
 	case *types.ObjectType:
-		result, err = g.renderObject(resolved, tt)
+		return g.buildObject(mode, desc, typeInfo, tt, ctx.apiPath, computedSubtree)
 	case *types.ArrayType:
-		result.code, err = g.renderArray(resolved, tt)
+		attr, err := g.buildArray(mode, desc, typeInfo, tt, ctx.apiPath, computedSubtree)
+		return attr, "", err
 	case *types.DiscriminatedObjectType:
 		// TODO: Discriminator needs a different solution instead of dynamic attribute, but more thoughts needed.
 		panic(fmt.Sprintf("DiscriminatedObjectType not supported: %s at %s", ctx.file, ctx.apiPath))
 	default:
 		log.Printf("[WARN] Unexpected type %T found in file %q: %v", tt, ctx.file, ctx.apiPath)
-		result.comment = fmt.Sprintf("dynamic: unexpected type %T", tt)
-		result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
+		return DynamicAttr{Mode: mode, Description: desc}, fmt.Sprintf("dynamic: unexpected type %T", tt), nil
 	}
-	if err != nil {
-		return renderedAttribute{}, err
-	}
-	return result, nil
 }
 
-func (g *resourceGenerator) renderStringLiteral(ctx resolvedAttribute, st *types.StringLiteralType) string {
-	g.goImports.add(importStringValidator)
-	var b strings.Builder
-	b.WriteString("schema.StringAttribute{\n")
-	b.WriteString(ctx.mode)
-	b.WriteString(ctx.desc)
-	if st.Sensitive {
-		b.WriteString("Sensitive: true,\n")
-	}
-	fmt.Fprintf(&b, "Validators: []validator.String{\nstringvalidator.OneOf(%q),\n},\n", st.Value)
-	b.WriteString("}")
-	return b.String()
-}
-
-func (g *resourceGenerator) renderString(ctx resolvedAttribute, st *types.StringType) string {
-	var b strings.Builder
-	b.WriteString("schema.StringAttribute{\n")
-	b.WriteString(ctx.mode)
-	b.WriteString(ctx.desc)
-	if st.Sensitive {
-		b.WriteString("Sensitive: true,\n")
-	}
-	var vs []string
+func (g *resourceGenerator) buildString(behavior Mode, desc string, st *types.StringType) StringAttr {
+	attr := StringAttr{Mode: behavior, Description: desc, Sensitive: st.Sensitive}
 	if st.Pattern != "" {
-		g.goImports.add(importStringValidator)
-		g.goImports.add(importRegexp)
-		vs = append(vs, fmt.Sprintf("stringvalidator.RegexMatches(regexp.MustCompile(%q), \"\"),", st.Pattern))
+		attr.Validators = append(attr.Validators, RegexMatches{Pattern: st.Pattern})
 	}
 	switch {
 	case st.MinLength != nil && st.MaxLength != nil:
-		g.goImports.add(importStringValidator)
-		vs = append(vs, fmt.Sprintf("stringvalidator.LengthBetween(%d, %d),", *st.MinLength, *st.MaxLength))
+		attr.Validators = append(attr.Validators, LengthBetween{Min: *st.MinLength, Max: *st.MaxLength})
 	case st.MinLength != nil:
-		g.goImports.add(importStringValidator)
-		vs = append(vs, fmt.Sprintf("stringvalidator.LengthAtLeast(%d),", *st.MinLength))
+		attr.Validators = append(attr.Validators, LengthAtLeast{Min: *st.MinLength})
 	case st.MaxLength != nil:
-		g.goImports.add(importStringValidator)
-		vs = append(vs, fmt.Sprintf("stringvalidator.LengthAtMost(%d),", *st.MaxLength))
+		attr.Validators = append(attr.Validators, LengthAtMost{Max: *st.MaxLength})
 	}
-	if len(vs) > 0 {
-		b.WriteString("Validators: []validator.String{\n")
-		for _, v := range vs {
-			b.WriteString(v + "\n")
-		}
-		b.WriteString("},\n")
-	}
-	b.WriteString("}")
-	return b.String()
+	return attr
 }
 
-func (g *resourceGenerator) renderInteger(ctx resolvedAttribute, it *types.IntegerType) string {
-	var b strings.Builder
-	b.WriteString("schema.Int64Attribute{\n")
-	b.WriteString(ctx.mode)
-	b.WriteString(ctx.desc)
-	var v string
+func (g *resourceGenerator) buildInteger(behavior Mode, desc string, it *types.IntegerType) Int64Attr {
+	attr := Int64Attr{Mode: behavior, Description: desc}
 	switch {
 	case it.MinValue != nil && it.MaxValue != nil:
-		v = fmt.Sprintf("int64validator.Between(%d, %d),", *it.MinValue, *it.MaxValue)
+		attr.Validators = append(attr.Validators, IntBetween{Min: *it.MinValue, Max: *it.MaxValue})
 	case it.MinValue != nil:
-		v = fmt.Sprintf("int64validator.AtLeast(%d),", *it.MinValue)
+		attr.Validators = append(attr.Validators, IntAtLeast{Min: *it.MinValue})
 	case it.MaxValue != nil:
-		v = fmt.Sprintf("int64validator.AtMost(%d),", *it.MaxValue)
+		attr.Validators = append(attr.Validators, IntAtMost{Max: *it.MaxValue})
 	}
-	if v != "" {
-		g.goImports.add(importInt64Validator)
-		b.WriteString("Validators: []validator.Int64{\n" + v + "\n},\n")
-	}
-	b.WriteString("}")
-	return b.String()
+	return attr
 }
 
-func (g *resourceGenerator) renderUnionAsStringish(ctx resolvedAttribute, ut *types.UnionType) (string, bool) {
-	literals, stringish := g.unionStrings(ctx.typeInfo.key.file, ut)
+func (g *resourceGenerator) buildUnionAsStringish(behavior Mode, desc string, typeInfo bicepType, ut *types.UnionType) (StringAttr, bool) {
+	literals, stringish := g.unionStrings(typeInfo.key.file, ut)
 	if !stringish {
-		return "", false
+		return StringAttr{}, false
 	}
-	var b strings.Builder
-	b.WriteString("schema.StringAttribute{\n")
-	b.WriteString(ctx.mode)
-	b.WriteString(ctx.desc)
+	attr := StringAttr{Mode: behavior, Description: desc}
 	if len(literals) > 0 {
-		g.goImports.add(importStringValidator)
-		quoted := make([]string, len(literals))
-		for i, l := range literals {
-			quoted[i] = fmt.Sprintf("%q", l)
-		}
-		fmt.Fprintf(&b, "Validators: []validator.String{\nstringvalidator.OneOf(%s),\n},\n", strings.Join(quoted, ", "))
+		attr.Validators = append(attr.Validators, OneOf{Values: literals})
 	}
-	b.WriteString("}")
-	return b.String(), true
+	return attr, true
 }
 
 // unionStrings returns the string-literal values of a union and whether every
@@ -462,28 +379,24 @@ func (g *resourceGenerator) unionStrings(file string, ut *types.UnionType) (lite
 	return literals, stringish
 }
 
-func (g *resourceGenerator) renderObject(ctx resolvedAttribute, ot *types.ObjectType) (renderedAttribute, error) {
-	var sens string
-	if ot.Sensitive != nil && *ot.Sensitive {
-		sens = "Sensitive: true,\n"
-	}
+func (g *resourceGenerator) buildObject(behavior Mode, desc string, typeInfo bicepType, ot *types.ObjectType, apiPath []string, computed bool) (AttributeType, string, error) {
+	sensitive := ot.Sensitive != nil && *ot.Sensitive
 
-	key := ctx.typeInfo.key
+	key := typeInfo.key
 	if g.visiting[key] {
+		log.Printf("[WARN] visited type %v at %v", typeInfo, apiPath)
 		// Self-referential type. Emit a dynamic attribute to break the cycle.
-		return renderedAttribute{
-			code:    "schema.DynamicAttribute{\n" + ctx.mode + ctx.desc + sens + "}",
-			comment: "dynamic: self-referential object type",
-		}, nil
+		return DynamicAttr{Mode: behavior, Description: desc, Sensitive: sensitive},
+			"dynamic: self-referential object type", nil
 	}
 	g.visiting[key] = true
 	defer delete(g.visiting, key)
 
 	// Map-like object (no declared properties, only additionalProperties).
 	if len(ot.Properties) == 0 && ot.AdditionalProperties != nil {
-		element, err := g.loader.resolve(ctx.typeInfo.key.file, ot.AdditionalProperties)
+		element, err := g.loader.resolve(typeInfo.key.file, ot.AdditionalProperties)
 		if err != nil {
-			return renderedAttribute{}, err
+			return nil, "", err
 		}
 		if eo, ok := element.t.(*types.ObjectType); ok && len(eo.Properties) > 0 {
 			// Guard the element too.
@@ -491,132 +404,112 @@ func (g *resourceGenerator) renderObject(ctx resolvedAttribute, ot *types.Object
 			if !g.visiting[ekey] {
 				g.visiting[ekey] = true
 				defer delete(g.visiting, ekey)
-				children, err := g.renderChildren(element.key.file, eo, append(slices.Clone(ctx.apiPath), "*"))
+				children, err := g.buildChildren(element.key.file, eo, append(slices.Clone(apiPath), "*"), computed)
 				if err != nil {
-					return renderedAttribute{}, err
+					return nil, "", err
 				}
-				var b strings.Builder
-				b.WriteString("schema.MapNestedAttribute{\n")
-				b.WriteString(ctx.mode)
-				b.WriteString(ctx.desc)
-				b.WriteString(sens)
-				b.WriteString("NestedObject: schema.NestedAttributeObject{\nAttributes: map[string]schema.Attribute{\n")
-				b.WriteString(children)
-				b.WriteString("},\n},\n}")
-				return renderedAttribute{code: b.String()}, nil
+				return MapNestedAttr{
+					Mode:        behavior,
+					Description: desc,
+					Sensitive:   sensitive,
+					Attributes:  children,
+				}, "", nil
 			}
 		}
-		elemType, err := g.attrType(element.key.file, element.t)
+		elemType, err := g.buildElemType(element.key.file, element.t)
 		if err != nil {
-			return renderedAttribute{}, err
+			return nil, "", err
 		}
-		var b strings.Builder
-		b.WriteString("schema.MapAttribute{\n")
-		b.WriteString(ctx.mode)
-		b.WriteString(fmt.Sprintf("ElementType: %s,\n", elemType))
-		b.WriteString(ctx.desc)
-		b.WriteString(sens)
-		b.WriteString("}")
-		return renderedAttribute{code: b.String()}, nil
+		return MapAttr{
+			Mode:        behavior,
+			Description: desc,
+			Sensitive:   sensitive,
+			ElementType: elemType,
+		}, "", nil
 	}
 
 	// Plain object with no properties at all -> dynamic.
 	if len(ot.Properties) == 0 {
-		return renderedAttribute{
-			code:    "schema.DynamicAttribute{\n" + ctx.mode + ctx.desc + sens + "}",
-			comment: "dynamic: object type with no properties",
-		}, nil
+		return DynamicAttr{Mode: behavior, Description: desc, Sensitive: sensitive},
+			"dynamic: object type with no properties", nil
 	}
 
-	children, err := g.renderChildren(ctx.typeInfo.key.file, ot, ctx.apiPath)
+	children, err := g.buildChildren(typeInfo.key.file, ot, apiPath, computed)
 	if err != nil {
-		return renderedAttribute{}, err
+		return nil, "", err
 	}
-	var b strings.Builder
-	b.WriteString("schema.SingleNestedAttribute{\n")
-	b.WriteString(ctx.mode)
-	b.WriteString(ctx.desc)
-	b.WriteString(sens)
-	b.WriteString("Attributes: map[string]schema.Attribute{\n")
-	b.WriteString(children)
-	b.WriteString("},\n}")
-	return renderedAttribute{code: b.String()}, nil
+	return SingleNestedAttr{
+		Mode:        behavior,
+		Description: desc,
+		Sensitive:   sensitive,
+		Attributes:  children,
+	}, "", nil
 }
 
-func (g *resourceGenerator) renderArray(ctx resolvedAttribute, at *types.ArrayType) (string, error) {
-	item, err := g.loader.resolve(ctx.typeInfo.key.file, at.ItemType)
+func (g *resourceGenerator) buildArray(behavior Mode, desc string, typeInfo bicepType, at *types.ArrayType, apiPath []string, computed bool) (AttributeType, error) {
+	item, err := g.loader.resolve(typeInfo.key.file, at.ItemType)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	listVals := g.listValidators(at)
+	validators := g.listValidators(at)
 
 	if io, ok := item.t.(*types.ObjectType); ok && len(io.Properties) > 0 {
 		key := item.key
 		if g.visiting[key] {
+			log.Printf("[WARN] visited type %v at %v", typeInfo, apiPath)
 			// Cycle: fall back to a dynamic list.
-			g.goImports.add(importFrameworkTypes)
-			var b strings.Builder
-			b.WriteString("schema.ListAttribute{\n")
-			b.WriteString(ctx.mode)
-			b.WriteString("ElementType: types.DynamicType,\n")
-			b.WriteString(ctx.desc)
-			b.WriteString(listVals)
-			b.WriteString("}")
-			return b.String(), nil
+			return ListAttr{
+				Mode:        behavior,
+				Description: desc,
+				ElementType: DynamicElem{},
+				Validators:  validators,
+			}, nil
 		}
 		g.visiting[key] = true
 		defer delete(g.visiting, key)
 
-		children, err := g.renderChildren(item.key.file, io, append(slices.Clone(ctx.apiPath), "*"))
+		children, err := g.buildChildren(item.key.file, io, append(slices.Clone(apiPath), "*"), computed)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		var b strings.Builder
-		b.WriteString("schema.ListNestedAttribute{\n")
-		b.WriteString(ctx.mode)
-		b.WriteString(ctx.desc)
-		b.WriteString(listVals)
-		b.WriteString("NestedObject: schema.NestedAttributeObject{\nAttributes: map[string]schema.Attribute{\n")
-		b.WriteString(children)
-		b.WriteString("},\n},\n}")
-		return b.String(), nil
+		return ListNestedAttr{
+			Mode:        behavior,
+			Description: desc,
+			Validators:  validators,
+			Attributes:  children,
+		}, nil
 	}
 
-	elemType, err := g.attrType(item.key.file, item.t)
+	elemType, err := g.buildElemType(item.key.file, item.t)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var b strings.Builder
-	b.WriteString("schema.ListAttribute{\n")
-	b.WriteString(ctx.mode)
-	b.WriteString(fmt.Sprintf("ElementType: %s,\n", elemType))
-	b.WriteString(ctx.desc)
-	b.WriteString(listVals)
-	b.WriteString("}")
-	return b.String(), nil
+	return ListAttr{
+		Mode:        behavior,
+		Description: desc,
+		ElementType: elemType,
+		Validators:  validators,
+	}, nil
 }
 
-func (g *resourceGenerator) listValidators(at *types.ArrayType) string {
-	var v string
+func (g *resourceGenerator) listValidators(at *types.ArrayType) []ListValidator {
 	switch {
 	case at.MinLength != nil && at.MaxLength != nil:
-		v = fmt.Sprintf("listvalidator.SizeBetween(%d, %d),", *at.MinLength, *at.MaxLength)
+		return []ListValidator{SizeBetween{Min: *at.MinLength, Max: *at.MaxLength}}
 	case at.MinLength != nil:
-		v = fmt.Sprintf("listvalidator.SizeAtLeast(%d),", *at.MinLength)
+		return []ListValidator{SizeAtLeast{Min: *at.MinLength}}
 	case at.MaxLength != nil:
-		v = fmt.Sprintf("listvalidator.SizeAtMost(%d),", *at.MaxLength)
+		return []ListValidator{SizeAtMost{Max: *at.MaxLength}}
 	}
-	if v == "" {
-		return ""
-	}
-	g.goImports.add(importListValidator)
-	return "Validators: []validator.List{\n" + v + "\n},\n"
+	return nil
 }
 
-// renderChildren renders the attributes of an object's properties, ordered as
-// Required -> Optional -> Computed, alphabetically within each group.
-func (g *resourceGenerator) renderChildren(file string, ot *types.ObjectType, camelPath []string) (string, error) {
-	var required, optional, computed []attrEntry
+// buildChildren builds the attributes of an object's properties, ordered as
+// Required -> Optional -> Computed, alphabetically within each group. When
+// computed is true, this object lives under a Computed-only ancestor, so every
+// child is forced to Computed-only.
+func (g *resourceGenerator) buildChildren(file string, ot *types.ObjectType, camelPath []string, computed bool) ([]*Attribute, error) {
+	var required, optional, computedAttrs []*Attribute
 	for name, prop := range ot.Properties {
 		childPath := append(slices.Clone(camelPath), name)
 		if !g.includePath(childPath) {
@@ -627,156 +520,107 @@ func (g *resourceGenerator) renderChildren(file string, ot *types.ObjectType, ca
 		// shared models that are reused between configurable and Computed
 		// contexts (e.g. a status/props sub-object referenced from a
 		// read-only parent).
-		if g.computedDepth > 0 {
+		if computed {
 			prop.Flags = types.TypePropertyFlagsReadOnly
 		}
-		tfName := g.tfName(childPath)
-		rendered, err := g.renderAttribute(attributeContext{file: file, property: prop, apiPath: childPath})
+		attrType, comment, err := g.buildAttribute(attributeContext{file: file, property: prop, apiPath: childPath, computed: computed})
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		entry := attrEntry{tfName: tfName, code: rendered.code, comment: rendered.comment, mode: modeOf(prop.Flags)}
-		switch entry.mode {
-		case modeRequired:
+		entry := &Attribute{Name: g.tfName(childPath), Comment: comment, Type: attrType}
+		switch modeof(prop.Flags) {
+		case Required:
 			required = append(required, entry)
-		case modeOptional:
+		case Optional:
 			optional = append(optional, entry)
-		case modeComputed:
-			computed = append(computed, entry)
+		case Computed:
+			computedAttrs = append(computedAttrs, entry)
 		}
 	}
-	byTFName := func(s []attrEntry) {
-		sort.Slice(s, func(i, j int) bool { return s[i].tfName < s[j].tfName })
-	}
-	byTFName(required)
-	byTFName(optional)
-	byTFName(computed)
+	sortByName(required)
+	sortByName(optional)
+	sortByName(computedAttrs)
 
-	var b strings.Builder
-	for _, group := range [][]attrEntry{required, optional, computed} {
-		for _, e := range group {
-			if e.comment != "" {
-				fmt.Fprintf(&b, "// %s\n", e.comment)
-			}
-			fmt.Fprintf(&b, "%q: %s,\n", e.tfName, e.code)
-		}
-	}
-	return b.String(), nil
-}
-
-// -----------------------------------------------------------------------------
-// attr.Type expressions (for ElementType of list/map attributes)
+	out := make([]*Attribute, 0, len(required)+len(optional)+len(computedAttrs))
+	out = append(out, required...)
+	out = append(out, optional...)
+	out = append(out, computedAttrs...)
+	return out, nil
+} // -----------------------------------------------------------------------------
+// attr.Type expressions (ElementType of list/map attributes)
 // -----------------------------------------------------------------------------
 
-func (g *resourceGenerator) attrType(file string, t types.Type) (string, error) {
-	return g.attrTypeGuarded(file, t, map[bicepTypeKey]bool{})
+func (g *resourceGenerator) buildElemType(file string, t types.Type) (ElemType, error) {
+	return g.buildElemTypeGuarded(file, t, map[bicepTypeKey]bool{})
 }
 
-func (g *resourceGenerator) attrTypeGuarded(file string, t types.Type, seen map[bicepTypeKey]bool) (string, error) {
+func (g *resourceGenerator) buildElemTypeGuarded(file string, t types.Type, seen map[bicepTypeKey]bool) (ElemType, error) {
 	switch tt := t.(type) {
 	case *types.StringType, *types.StringLiteralType:
-		g.goImports.add(importFrameworkTypes)
-		return "types.StringType", nil
+		return StringElem{}, nil
 	case *types.IntegerType:
-		g.goImports.add(importFrameworkTypes)
-		return "types.Int64Type", nil
+		return Int64Elem{}, nil
 	case *types.BooleanType:
-		g.goImports.add(importFrameworkTypes)
-		return "types.BoolType", nil
+		return BoolElem{}, nil
 	case *types.AnyType, *types.BuiltInType, *types.DiscriminatedObjectType:
-		g.goImports.add(importFrameworkTypes)
-		return "types.DynamicType", nil
+		return DynamicElem{}, nil
 	case *types.UnionType:
 		if _, stringish := g.unionStrings(file, tt); stringish {
-			g.goImports.add(importFrameworkTypes)
-			return "types.StringType", nil
+			return StringElem{}, nil
 		}
-		g.goImports.add(importFrameworkTypes)
-		return "types.DynamicType", nil
+		return DynamicElem{}, nil
 	case *types.ArrayType:
 		item, err := g.loader.resolve(file, tt.ItemType)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		et, err := g.attrTypeGuarded(item.key.file, item.t, seen)
+		et, err := g.buildElemTypeGuarded(item.key.file, item.t, seen)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		g.goImports.add(importFrameworkTypes)
-		return fmt.Sprintf("types.ListType{ElemType: %s}", et), nil
+		return ListElem{Elem: et}, nil
 	case *types.ObjectType:
 		if len(tt.Properties) == 0 && tt.AdditionalProperties != nil {
 			element, err := g.loader.resolve(file, tt.AdditionalProperties)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			et, err := g.attrTypeGuarded(element.key.file, element.t, seen)
+			et, err := g.buildElemTypeGuarded(element.key.file, element.t, seen)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			g.goImports.add(importFrameworkTypes)
-			return fmt.Sprintf("types.MapType{ElemType: %s}", et), nil
+			return MapElem{Elem: et}, nil
 		}
 		if len(tt.Properties) == 0 {
-			g.goImports.add(importFrameworkTypes)
-			return "types.DynamicType", nil
+			return DynamicElem{}, nil
 		}
 		names := make([]string, 0, len(tt.Properties))
 		for name := range tt.Properties {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		var b strings.Builder
-		g.goImports.add(importFrameworkTypes)
-		g.goImports.add(importAttr)
-		b.WriteString("types.ObjectType{AttrTypes: map[string]attr.Type{\n")
+		obj := ObjectElem{}
 		for _, name := range names {
 			child, err := g.loader.resolve(file, tt.Properties[name].Type)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			// Cycle protection for nested object attrType construction.
 			ckey := child.key
 			if seen[ckey] {
-				fmt.Fprintf(&b, "%q: types.DynamicType,\n", modelconv.ToSnakeCaseSmart(name))
+				obj.Attributes = append(obj.Attributes, ObjectElemAttr{Name: modelconv.ToSnakeCaseSmart(name), Type: DynamicElem{}})
 				continue
 			}
 			seen[ckey] = true
-			et, err := g.attrTypeGuarded(child.key.file, child.t, seen)
+			et, err := g.buildElemTypeGuarded(child.key.file, child.t, seen)
 			delete(seen, ckey)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			fmt.Fprintf(&b, "%q: %s,\n", modelconv.ToSnakeCaseSmart(name), et)
+			obj.Attributes = append(obj.Attributes, ObjectElemAttr{Name: modelconv.ToSnakeCaseSmart(name), Type: et})
 		}
-		b.WriteString("}}")
-		return b.String(), nil
+		return obj, nil
 	default:
-		g.goImports.add(importFrameworkTypes)
-		return "types.DynamicType", nil
+		return DynamicElem{}, nil
 	}
-}
-
-// -----------------------------------------------------------------------------
-// helpers
-// -----------------------------------------------------------------------------
-
-func modeLine(flags types.TypePropertyFlags) string {
-	switch modeOf(flags) {
-	case modeRequired:
-		return "Required: true,\n"
-	case modeComputed:
-		return "Computed: true,\n"
-	case modeOptional:
-		return "Optional: true,\n"
-	default:
-		panic("unreachable modeLine")
-	}
-}
-
-func descLine(desc string) string {
-	if desc == "" {
-		return ""
-	}
-	return fmt.Sprintf("MarkdownDescription: %q,\n", desc)
 }
