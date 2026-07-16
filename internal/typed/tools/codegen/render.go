@@ -13,19 +13,47 @@ import (
 // import set
 // -----------------------------------------------------------------------------
 
-type importSet struct {
-	// path -> alias ("" means no explicit alias)
+type GoImportSet struct {
 	m map[string]string
 }
 
-func (s *importSet) add(path, alias string) {
-	if _, ok := s.m[path]; ok {
-		return
-	}
-	s.m[path] = alias
+type goImport struct {
+	path  string
+	alias string
 }
 
-func (s *importSet) render() string {
+var (
+	importContext            = goImport{path: "context"}
+	importRegexp             = goImport{path: "regexp"}
+	importMyValidator        = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"}
+	importFramework          = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/typed/framework"}
+	importModelConv          = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"}
+	importServiceHooks       = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/typed/servicehooks"}
+	importTimeouts           = goImport{path: "github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"}
+	importInt64Validator     = goImport{path: "github.com/hashicorp/terraform-plugin-framework-validators/int64validator"}
+	importListValidator      = goImport{path: "github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"}
+	importStringValidator    = goImport{path: "github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"}
+	importAttr               = goImport{path: "github.com/hashicorp/terraform-plugin-framework/attr"}
+	importResourceSchema     = goImport{path: "github.com/hashicorp/terraform-plugin-framework/resource/schema"}
+	importPlanModifier       = goImport{path: "github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"}
+	importStringPlanModifier = goImport{path: "github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"}
+	importValidator          = goImport{path: "github.com/hashicorp/terraform-plugin-framework/schema/validator"}
+	importFrameworkTypes     = goImport{path: "github.com/hashicorp/terraform-plugin-framework/types"}
+	importTFFrameworkDocs    = goImport{path: "github.com/magodo/terraform-plugin-framework-docs", alias: "tffwdocs"}
+)
+
+func newImportSet() *GoImportSet {
+	return &GoImportSet{m: make(map[string]string)}
+}
+
+func (s *GoImportSet) add(value goImport) {
+	if _, ok := s.m[value.path]; ok {
+		return
+	}
+	s.m[value.path] = value.alias
+}
+
+func (s *GoImportSet) render() string {
 	paths := make([]string, 0, len(s.m))
 	for p := range s.m {
 		paths = append(paths, p)
@@ -141,24 +169,27 @@ Delete: true,
 // -----------------------------------------------------------------------------
 
 func (g *resourceGenerator) renderFile(attrs string, res *types.ResourceType) ([]byte, error) {
-	// Base imports that are always needed.
-	g.imports.add("context", "")
-	g.imports.add("github.com/Azure/terraform-provider-azapi/internal/services/myvalidator", "")
-	g.imports.add("github.com/Azure/terraform-provider-azapi/internal/typed/framework", "")
-	g.imports.add("github.com/Azure/terraform-provider-azapi/internal/typed/modelconv", "")
-	g.imports.add("github.com/Azure/terraform-provider-azapi/internal/typed/servicehooks", "")
-	g.imports.add("github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts", "")
-	g.imports.add("github.com/hashicorp/terraform-plugin-framework/resource/schema", "")
-	g.imports.add("github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier", "")
-	g.imports.add("github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier", "")
-	g.imports.add("github.com/hashicorp/terraform-plugin-framework/schema/validator", "")
-	g.imports.add("github.com/magodo/terraform-plugin-framework-docs", "tffwdocs")
+	for _, value := range []goImport{
+		importContext,
+		importMyValidator,
+		importFramework,
+		importModelConv,
+		importServiceHooks,
+		importTimeouts,
+		importResourceSchema,
+		importPlanModifier,
+		importStringPlanModifier,
+		importValidator,
+		importTFFrameworkDocs,
+	} {
+		g.goImports.add(value)
+	}
 
 	structName := g.structName()
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "package %s\n\n", g.serviceName())
-	b.WriteString(g.imports.render())
+	b.WriteString(g.goImports.render())
 	b.WriteString("\n")
 
 	fmt.Fprintf(&b, "type %s struct {\n\thooks servicehooks.ResourceHooks\n}\n\n", structName)

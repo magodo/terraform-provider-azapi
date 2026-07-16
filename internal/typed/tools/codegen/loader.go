@@ -10,35 +10,50 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/azure"
 )
 
-// typeLoader loads bicep type files on demand and resolves type references.
-type typeLoader struct {
+type bicepTypeLoader struct {
 	files map[string][]types.Type
 }
 
-func NewTypeLoader() typeLoader {
-	return typeLoader{files: map[string][]types.Type{}}
+type bicepTypeKey struct {
+	file string
+	idx  int
 }
 
-// Resolve follows a type reference relative to the given file, returning the
-// referenced concrete type, the file it lives in (for further resolution), and
-// the numeric index within that file.
-func (l *typeLoader) Resolve(file string, ref types.ITypeReference) (types.Type, string, int, error) {
+type bicepType struct {
+	t   types.Type
+	key bicepTypeKey
+}
+
+func newBicepTypeLoader() bicepTypeLoader {
+	return bicepTypeLoader{files: map[string][]types.Type{}}
+}
+
+// resolve follows a type reference relative to the given file.
+func (l *bicepTypeLoader) resolve(file string, ref types.ITypeReference) (bicepType, error) {
+	var index int
 	switch r := ref.(type) {
 	case types.TypeReference:
-		t, err := l.typeAt(file, r.Ref)
-		return t, file, r.Ref, err
+		index = r.Ref
 	case types.CrossFileTypeReference:
 		if r.RelativePath != "" {
 			file = filepath.Join(filepath.Dir(file), r.RelativePath)
 		}
-		t, err := l.typeAt(file, r.Ref)
-		return t, file, r.Ref, err
+		index = r.Ref
 	default:
-		return nil, "", 0, fmt.Errorf("unsupported type reference %T", ref)
+		return bicepType{}, fmt.Errorf("unsupported type reference %T", ref)
 	}
+
+	t, err := l.typeAt(file, index)
+	if err != nil {
+		return bicepType{}, err
+	}
+	return bicepType{
+		t:   t,
+		key: bicepTypeKey{file: file, idx: index},
+	}, nil
 }
 
-func (l *typeLoader) typeAt(file string, idx int) (types.Type, error) {
+func (l *bicepTypeLoader) typeAt(file string, idx int) (types.Type, error) {
 	ts, ok := l.files[file]
 	if !ok {
 		b, err := azure.StaticFiles.ReadFile(file)

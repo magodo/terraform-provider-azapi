@@ -14,166 +14,86 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 )
 
-// resourceGenerator holds the state required to render a single typed resource.
 type resourceGenerator struct {
-	loader typeLoader
+	loader bicepTypeLoader
 
 	apiResourceType string // "Microsoft.Network/virtualNetworks"
 	apiVersion      string // "2025-01-01"
 	tfType          string // "azapi_virtual_network"
-
-	// rules are the ordered --remove-attr / --add-attr filters (in the order
-	// they appeared on the command line). Later rules override earlier ones
-	// for overlapping paths. See includePath for details.
-	rules []attrRule
+	rules           []attrRule
 
 	// nameOverrides records API(camel) path -> TF(snake) name, only when the
-	// naive snake conversion differs from the smart one (so expand/flatten can
-	// reverse the mapping).
+	// naive snake conversion differs from the smart one.
 	nameOverrides map[string]string
 
-	imports *importSet
+	goImports *GoImportSet
 
-	// visiting tracks bicep types currently in the render stack so we can break
-	// self-referential cycles (e.g. Subnet.ipConfigurations[*].subnet -> Subnet).
-	visiting map[typeKey]bool
+	visiting map[bicepTypeKey]bool
 
 	// computedDepth is > 0 while we are rendering the subtree of an attribute
-	// that is Computed-only (ReadOnly, not Required). Every descendant in such
-	// a subtree is forced to Computed-only as well, regardless of its own
-	// bicep flags. This avoids leaking configurable-looking children from a
-	// shared model that happens to be referenced from a Computed context.
+	// that is Computed-only (ReadOnly, not Required).
+	// Every descendant in such a subtree is forced to Computed-only as well,
+	// regardless of its own bicep flags.
 	computedDepth int
 }
 
-// attrRule is a single --remove-attr / --add-attr rule. path uses camelCase
-// API segments and includes a literal "*" segment for every array/map
-// element boundary (matching how apiPath is constructed during rendering).
 type attrRule struct {
 	path    []string
-	include bool // true for --add-attr, false for --remove-attr
+	include bool
 }
 
-func NewResourceGenerator(apiType, tfType string, rules []attrRule) (*resourceGenerator, error) {
-	apiResourceType, apiVersion, ok := strings.Cut(apiType, "@")
+type resourceGeneratorOptions struct {
+	apiType string
+	tfType  string
+	rules   []attrRule
+}
+
+func newResourceGenerator(options resourceGeneratorOptions) (*resourceGenerator, error) {
+	apiResourceType, apiVersion, ok := strings.Cut(options.apiType, "@")
 	if !ok {
-		return nil, fmt.Errorf("invalid api type %q, expected format <ApiResourceType>@<ApiVersion>", apiType)
+		return nil, fmt.Errorf("invalid api type %q, expected format <ApiResourceType>@<ApiVersion>", options.apiType)
 	}
 
-	loader := NewTypeLoader()
-
 	return &resourceGenerator{
-		loader:          loader,
+		loader:          newBicepTypeLoader(),
 		apiResourceType: apiResourceType,
 		apiVersion:      apiVersion,
-		tfType:          tfType,
-		rules:           rules,
+		tfType:          options.tfType,
+		rules:           options.rules,
 		nameOverrides:   map[string]string{},
-		imports: &importSet{
-			m: map[string]string{},
-		},
-		visiting: map[typeKey]bool{},
+		goImports:       newImportSet(),
+		visiting:        map[bicepTypeKey]bool{},
 	}, nil
 }
 
+// alwaysIgnoreAttributes lists API (camelCase) property names that are
+// unconditionally excluded from the generated schema at any nesting level.
+var alwaysIgnoreAttributes = map[string]bool{
+	"etag":              true,
+	"provisioningState": true,
+	"systemData":        true,
+}
+
 // includePath reports whether the attribute at the given API path should be
-// rendered, given the ordered --remove-attr / --add-attr rules.
-//
-// Semantics: wildcard ("*") segments in apiPath (representing array/map
-// element boundaries) are transparent when matching against rule paths.
-// Rules are applied in the order they appeared on the command line; later
-// rules override earlier ones for overlapping paths.
-//
-// For a path P, its "effective status" is determined by the last rule whose
-// path is a prefix of P (or the default "include" if no such rule exists).
-// P is rendered iff:
-//   - its effective status is include, OR
-//   - P is a proper ancestor of some --add-attr rule A whose own effective
-//     status (recursively) is include -- so that intermediate nodes are
-//     traversed to reach the re-included descendant.
-//
-// includePath reports whether the attribute at the given API path should be
-// rendered, given the ordered --remove-attr / --add-attr rules.
-//
-// Rule paths must include a literal "*" segment for every array/map element
-// boundary in the API path, matching exactly how apiPath is constructed.
-// Rules are applied in the order they appeared on the command line; a later
-// rule overrides earlier ones for overlapping paths.
-//
-// For a path P, its "effective status" is determined by the last rule whose
-// path is a prefix of P (default: include). P is rendered iff:
-//   - its effective status is include, OR
-//   - P is a proper ancestor of some --add-attr rule A whose own effective
-//     status is include -- so intermediate nodes are traversed to reach the
-//     re-included descendant.
+// rendered, given the ordered rules.
 func (g *resourceGenerator) includePath(apiPath []string) bool {
-	// Always ignore certain attributes at any nesting level. These are Azure
-	// system-managed fields that should never surface in the Terraform schema.
+	// Always ignore certain attributes at any nesting level.
 	if len(apiPath) > 0 {
 		if alwaysIgnoreAttributes[apiPath[len(apiPath)-1]] {
 			return false
 		}
 	}
-	if g.statusOf(apiPath) {
-		return true
-	}
-	// apiPath is excluded at its own level. Include as pass-through iff some
-	// later add-rule descendant is itself still effectively included.
-	for _, r := range g.rules {
-		if !r.include {
-			continue
-		}
-		if len(r.path) <= len(apiPath) {
-			continue
-		}
-		if !slices.Equal(r.path[:len(apiPath)], apiPath) {
-			continue
-		}
-		if g.statusOf(r.path) {
-			return true
-		}
-	}
-	return false
-}
-
-// statusOf returns the effective include/exclude status of path, i.e. the
-// kind of the last rule whose path is a prefix of it. Defaults to include.
-func (g *resourceGenerator) statusOf(path []string) bool {
 	include := true
 	for _, r := range g.rules {
-		if len(r.path) > len(path) {
-			continue
+		if len(r.path) <= len(apiPath) {
+			if slices.Equal(r.path, apiPath[:len(r.path)]) {
+				include = r.include
+			}
+		} else if r.include && slices.Equal(r.path[:len(apiPath)], apiPath) {
+			include = true
 		}
-		if !slices.Equal(r.path, path[:len(r.path)]) {
-			continue
-		}
-		include = r.include
 	}
 	return include
-}
-
-type typeKey struct {
-	file string
-	ref  int
-}
-
-// Top-level ARM envelope properties that receive special handling and are never
-// rendered from the bicep body directly.
-var skipTopLevel = map[string]bool{
-	"type":       true,
-	"apiVersion": true,
-	"name":       true, // rendered as the fixed "name" attribute
-	"id":         true, // rendered as the fixed "id" attribute
-	"location":   true, // rendered as the fixed "location" attribute (when present)
-}
-
-// alwaysIgnoreAttributes lists API (camelCase) property names that are
-// unconditionally excluded from the generated schema at any nesting level.
-// Extend this map to skip additional attributes globally.
-var alwaysIgnoreAttributes = map[string]bool{
-	"etag":              true,
-	"provisioningState": true,
-	"systemData":        true,
 }
 
 // attrMode categorises an attribute for ordering purposes.
@@ -203,6 +123,24 @@ type attrEntry struct {
 	mode    attrMode
 }
 
+type attributeContext struct {
+	file     string
+	property types.ObjectTypeProperty
+	apiPath  []string
+}
+
+type resolvedAttribute struct {
+	typeInfo bicepType
+	mode     string
+	desc     string
+	apiPath  []string
+}
+
+type renderedAttribute struct {
+	code    string
+	comment string
+}
+
 func (g *resourceGenerator) Generate() ([]byte, error) {
 	indexFile := "generated/index.json"
 
@@ -220,26 +158,36 @@ func (g *resourceGenerator) Generate() ([]byte, error) {
 		return nil, fmt.Errorf("resource type %s@%s not found in the bicep index", g.apiResourceType, g.apiVersion)
 	}
 
-	t, file, _, err := g.loader.Resolve(indexFile, ref)
+	resourceType, err := g.loader.resolve(indexFile, ref)
 	if err != nil {
 		return nil, err
 	}
-	rt, ok := t.(*types.ResourceType)
+	rt, ok := resourceType.t.(*types.ResourceType)
 	if !ok {
-		return nil, fmt.Errorf("index entry for %s@%s is not a ResourceType (got %T)", g.apiResourceType, g.apiVersion, t)
+		return nil, fmt.Errorf("index entry for %s@%s is not a ResourceType (got %T)", g.apiResourceType, g.apiVersion, resourceType.t)
 	}
 
-	bodyType, bodyFile, bodyRef, err := g.loader.Resolve(file, rt.Body)
+	bodyType, err := g.loader.resolve(resourceType.key.file, rt.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve resource body: %w", err)
 	}
-	body, ok := bodyType.(*types.ObjectType)
+	body, ok := bodyType.t.(*types.ObjectType)
 	if !ok {
-		return nil, fmt.Errorf("resource body is not an object type (got %T)", bodyType)
+		return nil, fmt.Errorf("resource body is not an object type (got %T)", bodyType.t)
 	}
-	g.visiting = map[typeKey]bool{{file: bodyFile, ref: bodyRef}: true}
+	g.visiting = map[bicepTypeKey]bool{bodyType.key: true}
 
 	_, hasLocation := body.Properties["location"]
+
+	// Top-level bicep resource properties that we skip to convert to TF schema,
+	// either because we don't export them or they have special rendering.
+	var skipTopLevel = map[string]bool{
+		"type":       true,
+		"apiVersion": true,
+		"name":       true, // rendered as the fixed "name" attribute
+		"id":         true, // rendered as the fixed "id" attribute
+		"location":   true, // rendered as the fixed "location" attribute (when present)
+	}
 
 	// Render the body-derived attributes (everything except the special ones),
 	// bucketed by mode so that we can emit them in the desired order.
@@ -260,11 +208,11 @@ func (g *resourceGenerator) Generate() ([]byte, error) {
 			prop.Flags = (prop.Flags &^ types.TypePropertyFlagsReadOnly) | types.TypePropertyFlagsRequired
 		}
 		tfName := g.tfName(apiPath)
-		code, comment, err := g.renderAttribute(bodyFile, prop, apiPath)
+		rendered, err := g.renderAttribute(attributeContext{file: bodyType.key.file, property: prop, apiPath: apiPath})
 		if err != nil {
 			return nil, fmt.Errorf("failed to render attribute %q: %w", name, err)
 		}
-		entry := attrEntry{tfName: tfName, code: code, comment: comment, mode: modeOf(prop.Flags)}
+		entry := attrEntry{tfName: tfName, code: rendered.code, comment: rendered.comment, mode: modeOf(prop.Flags)}
 		switch entry.mode {
 		case modeRequired:
 			required = append(required, entry)
@@ -331,71 +279,76 @@ func (g *resourceGenerator) tfName(camelPath []string) string {
 // name as the last element ("*" is used for array element boundaries).
 // The returned comment, when non-empty, explains why a DynamicAttribute was
 // emitted and should be placed on the line above the attribute key/value pair.
-func (g *resourceGenerator) renderAttribute(file string, prop types.ObjectTypeProperty, apiPath []string) (code, comment string, err error) {
-	t, tfile, tref, err := g.loader.Resolve(file, prop.Type)
+func (g *resourceGenerator) renderAttribute(ctx attributeContext) (renderedAttribute, error) {
+	typeInfo, err := g.loader.resolve(ctx.file, ctx.property.Type)
 	if err != nil {
-		return "", "", err
+		return renderedAttribute{}, err
 	}
-	mode := modeLine(prop.Flags)
-	desc := descLine(prop.Description)
+	resolved := resolvedAttribute{
+		typeInfo: typeInfo,
+		mode:     modeLine(ctx.property.Flags),
+		desc:     descLine(ctx.property.Description),
+		apiPath:  ctx.apiPath,
+	}
+	var result renderedAttribute
 
 	// If this attribute is Computed-only, anything rendered underneath it must
 	// also be Computed-only. Track this via computedDepth; renderChildren
 	// consults it and rewrites each child's flags accordingly.
-	if modeOf(prop.Flags) == modeComputed {
+	if modeOf(ctx.property.Flags) == modeComputed {
 		g.computedDepth++
 		defer func() { g.computedDepth-- }()
 	}
 
-	switch tt := t.(type) {
+	switch tt := typeInfo.t.(type) {
 	case *types.StringType:
-		code = g.renderString(mode, desc, tt)
+		result.code = g.renderString(resolved, tt)
 	case *types.StringLiteralType:
-		code = g.renderStringLiteral(mode, desc, tt)
+		result.code = g.renderStringLiteral(resolved, tt)
 	case *types.IntegerType:
-		code = g.renderInteger(mode, desc, tt)
+		result.code = g.renderInteger(resolved, tt)
 	case *types.BooleanType:
-		code = "schema.BoolAttribute{\n" + mode + desc + "}"
+		result.code = "schema.BoolAttribute{\n" + resolved.mode + resolved.desc + "}"
 	case *types.UnionType:
 		var ok bool
-		code, ok = g.renderUnionAsStringish(tfile, mode, desc, tt)
+		result.code, ok = g.renderUnionAsStringish(resolved, tt)
 		if !ok {
-			log.Printf("[WARN] Unexpected union type of non-stringish variants in file %q: %v", tfile, apiPath)
-			comment = "dynamic: union type with non-stringish variants"
-			code = "schema.DynamicAttribute{\n" + mode + desc + "}"
+			log.Printf("[WARN] Unexpected union type of non-stringish variants in file %q: %v", typeInfo.key.file, ctx.apiPath)
+			result.comment = "dynamic: union type with non-stringish variants"
+			result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
 		}
 	case *types.AnyType:
-		comment = "dynamic: bicep any type"
-		code = "schema.DynamicAttribute{\n" + mode + desc + "}"
+		result.comment = "dynamic: bicep any type"
+		result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
 	case *types.BuiltInType:
 		// There is no BuiltInType in the bicep generated types any more.
-		log.Printf("[WARN] Unexpected BuiltInType found in file %q: %v", file, apiPath)
-		comment = "dynamic: unexpected BuiltInType"
-		code = "schema.DynamicAttribute{\n" + mode + desc + "}"
+		log.Printf("[WARN] Unexpected BuiltInType found in file %q: %v", ctx.file, ctx.apiPath)
+		result.comment = "dynamic: unexpected BuiltInType"
+		result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
 	case *types.ObjectType:
-		code, comment, err = g.renderObject(tfile, tref, mode, desc, tt, apiPath)
+		result, err = g.renderObject(resolved, tt)
 	case *types.ArrayType:
-		code, err = g.renderArray(tfile, mode, desc, tt, apiPath)
+		result.code, err = g.renderArray(resolved, tt)
 	case *types.DiscriminatedObjectType:
 		// TODO: Discriminator needs a different solution instead of dynamic attribute, but more thoughts needed.
-		panic(fmt.Sprintf("DiscriminatedObjectType not supported: %s at %s", file, apiPath))
+		panic(fmt.Sprintf("DiscriminatedObjectType not supported: %s at %s", ctx.file, ctx.apiPath))
 	default:
-		log.Printf("[WARN] Unexpected type %T found in file %q: %v", tt, file, apiPath)
-		comment = fmt.Sprintf("dynamic: unexpected type %T", tt)
-		code = "schema.DynamicAttribute{\n" + mode + desc + "}"
+		log.Printf("[WARN] Unexpected type %T found in file %q: %v", tt, ctx.file, ctx.apiPath)
+		result.comment = fmt.Sprintf("dynamic: unexpected type %T", tt)
+		result.code = "schema.DynamicAttribute{\n" + resolved.mode + resolved.desc + "}"
 	}
 	if err != nil {
-		return "", "", err
+		return renderedAttribute{}, err
 	}
-	return code, comment, nil
+	return result, nil
 }
 
-func (g *resourceGenerator) renderStringLiteral(mode, desc string, st *types.StringLiteralType) string {
-	g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator", "")
+func (g *resourceGenerator) renderStringLiteral(ctx resolvedAttribute, st *types.StringLiteralType) string {
+	g.goImports.add(importStringValidator)
 	var b strings.Builder
 	b.WriteString("schema.StringAttribute{\n")
-	b.WriteString(mode)
-	b.WriteString(desc)
+	b.WriteString(ctx.mode)
+	b.WriteString(ctx.desc)
 	if st.Sensitive {
 		b.WriteString("Sensitive: true,\n")
 	}
@@ -404,29 +357,29 @@ func (g *resourceGenerator) renderStringLiteral(mode, desc string, st *types.Str
 	return b.String()
 }
 
-func (g *resourceGenerator) renderString(mode, desc string, st *types.StringType) string {
+func (g *resourceGenerator) renderString(ctx resolvedAttribute, st *types.StringType) string {
 	var b strings.Builder
 	b.WriteString("schema.StringAttribute{\n")
-	b.WriteString(mode)
-	b.WriteString(desc)
+	b.WriteString(ctx.mode)
+	b.WriteString(ctx.desc)
 	if st.Sensitive {
 		b.WriteString("Sensitive: true,\n")
 	}
 	var vs []string
 	if st.Pattern != "" {
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator", "")
-		g.imports.add("regexp", "")
+		g.goImports.add(importStringValidator)
+		g.goImports.add(importRegexp)
 		vs = append(vs, fmt.Sprintf("stringvalidator.RegexMatches(regexp.MustCompile(%q), \"\"),", st.Pattern))
 	}
 	switch {
 	case st.MinLength != nil && st.MaxLength != nil:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator", "")
+		g.goImports.add(importStringValidator)
 		vs = append(vs, fmt.Sprintf("stringvalidator.LengthBetween(%d, %d),", *st.MinLength, *st.MaxLength))
 	case st.MinLength != nil:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator", "")
+		g.goImports.add(importStringValidator)
 		vs = append(vs, fmt.Sprintf("stringvalidator.LengthAtLeast(%d),", *st.MinLength))
 	case st.MaxLength != nil:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator", "")
+		g.goImports.add(importStringValidator)
 		vs = append(vs, fmt.Sprintf("stringvalidator.LengthAtMost(%d),", *st.MaxLength))
 	}
 	if len(vs) > 0 {
@@ -440,11 +393,11 @@ func (g *resourceGenerator) renderString(mode, desc string, st *types.StringType
 	return b.String()
 }
 
-func (g *resourceGenerator) renderInteger(mode, desc string, it *types.IntegerType) string {
+func (g *resourceGenerator) renderInteger(ctx resolvedAttribute, it *types.IntegerType) string {
 	var b strings.Builder
 	b.WriteString("schema.Int64Attribute{\n")
-	b.WriteString(mode)
-	b.WriteString(desc)
+	b.WriteString(ctx.mode)
+	b.WriteString(ctx.desc)
 	var v string
 	switch {
 	case it.MinValue != nil && it.MaxValue != nil:
@@ -455,24 +408,24 @@ func (g *resourceGenerator) renderInteger(mode, desc string, it *types.IntegerTy
 		v = fmt.Sprintf("int64validator.AtMost(%d),", *it.MaxValue)
 	}
 	if v != "" {
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/int64validator", "")
+		g.goImports.add(importInt64Validator)
 		b.WriteString("Validators: []validator.Int64{\n" + v + "\n},\n")
 	}
 	b.WriteString("}")
 	return b.String()
 }
 
-func (g *resourceGenerator) renderUnionAsStringish(file, mode, desc string, ut *types.UnionType) (string, bool) {
-	literals, stringish := g.unionStrings(file, ut)
+func (g *resourceGenerator) renderUnionAsStringish(ctx resolvedAttribute, ut *types.UnionType) (string, bool) {
+	literals, stringish := g.unionStrings(ctx.typeInfo.key.file, ut)
 	if !stringish {
 		return "", false
 	}
 	var b strings.Builder
 	b.WriteString("schema.StringAttribute{\n")
-	b.WriteString(mode)
-	b.WriteString(desc)
+	b.WriteString(ctx.mode)
+	b.WriteString(ctx.desc)
 	if len(literals) > 0 {
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator", "")
+		g.goImports.add(importStringValidator)
 		quoted := make([]string, len(literals))
 		for i, l := range literals {
 			quoted[i] = fmt.Sprintf("%q", l)
@@ -490,11 +443,11 @@ func (g *resourceGenerator) unionStrings(file string, ut *types.UnionType) (lite
 	allLiteral := true
 	stringish = true
 	for _, e := range ut.Elements {
-		t, _, _, err := g.loader.Resolve(file, e)
+		typeInfo, err := g.loader.resolve(file, e)
 		if err != nil {
 			return nil, false
 		}
-		switch et := t.(type) {
+		switch et := typeInfo.t.(type) {
 		case *types.StringLiteralType:
 			literals = append(literals, et.Value)
 		case *types.StringType:
@@ -509,98 +462,104 @@ func (g *resourceGenerator) unionStrings(file string, ut *types.UnionType) (lite
 	return literals, stringish
 }
 
-func (g *resourceGenerator) renderObject(file string, ref int, mode, desc string, ot *types.ObjectType, camelPath []string) (code, comment string, err error) {
+func (g *resourceGenerator) renderObject(ctx resolvedAttribute, ot *types.ObjectType) (renderedAttribute, error) {
 	var sens string
 	if ot.Sensitive != nil && *ot.Sensitive {
 		sens = "Sensitive: true,\n"
 	}
 
-	key := typeKey{file: file, ref: ref}
+	key := ctx.typeInfo.key
 	if g.visiting[key] {
 		// Self-referential type. Emit a dynamic attribute to break the cycle.
-		return "schema.DynamicAttribute{\n" + mode + desc + sens + "}", "dynamic: self-referential object type", nil
+		return renderedAttribute{
+			code:    "schema.DynamicAttribute{\n" + ctx.mode + ctx.desc + sens + "}",
+			comment: "dynamic: self-referential object type",
+		}, nil
 	}
 	g.visiting[key] = true
 	defer delete(g.visiting, key)
 
 	// Map-like object (no declared properties, only additionalProperties).
 	if len(ot.Properties) == 0 && ot.AdditionalProperties != nil {
-		elemT, elemFile, elemRef, err := g.loader.Resolve(file, ot.AdditionalProperties)
+		element, err := g.loader.resolve(ctx.typeInfo.key.file, ot.AdditionalProperties)
 		if err != nil {
-			return "", "", err
+			return renderedAttribute{}, err
 		}
-		if eo, ok := elemT.(*types.ObjectType); ok && len(eo.Properties) > 0 {
+		if eo, ok := element.t.(*types.ObjectType); ok && len(eo.Properties) > 0 {
 			// Guard the element too.
-			ekey := typeKey{file: elemFile, ref: elemRef}
+			ekey := element.key
 			if !g.visiting[ekey] {
 				g.visiting[ekey] = true
 				defer delete(g.visiting, ekey)
-				children, err := g.renderChildren(elemFile, eo, append(slices.Clone(camelPath), "*"))
+				children, err := g.renderChildren(element.key.file, eo, append(slices.Clone(ctx.apiPath), "*"))
 				if err != nil {
-					return "", "", err
+					return renderedAttribute{}, err
 				}
 				var b strings.Builder
 				b.WriteString("schema.MapNestedAttribute{\n")
-				b.WriteString(mode)
-				b.WriteString(desc)
+				b.WriteString(ctx.mode)
+				b.WriteString(ctx.desc)
 				b.WriteString(sens)
 				b.WriteString("NestedObject: schema.NestedAttributeObject{\nAttributes: map[string]schema.Attribute{\n")
 				b.WriteString(children)
 				b.WriteString("},\n},\n}")
-				return b.String(), "", nil
+				return renderedAttribute{code: b.String()}, nil
 			}
 		}
-		elemType, err := g.attrType(elemFile, elemT)
+		elemType, err := g.attrType(element.key.file, element.t)
 		if err != nil {
-			return "", "", err
+			return renderedAttribute{}, err
 		}
 		var b strings.Builder
 		b.WriteString("schema.MapAttribute{\n")
-		b.WriteString(mode)
+		b.WriteString(ctx.mode)
 		b.WriteString(fmt.Sprintf("ElementType: %s,\n", elemType))
-		b.WriteString(desc)
+		b.WriteString(ctx.desc)
 		b.WriteString(sens)
 		b.WriteString("}")
-		return b.String(), "", nil
+		return renderedAttribute{code: b.String()}, nil
 	}
 
 	// Plain object with no properties at all -> dynamic.
 	if len(ot.Properties) == 0 {
-		return "schema.DynamicAttribute{\n" + mode + desc + sens + "}", "dynamic: object type with no properties", nil
+		return renderedAttribute{
+			code:    "schema.DynamicAttribute{\n" + ctx.mode + ctx.desc + sens + "}",
+			comment: "dynamic: object type with no properties",
+		}, nil
 	}
 
-	children, err := g.renderChildren(file, ot, camelPath)
+	children, err := g.renderChildren(ctx.typeInfo.key.file, ot, ctx.apiPath)
 	if err != nil {
-		return "", "", err
+		return renderedAttribute{}, err
 	}
 	var b strings.Builder
 	b.WriteString("schema.SingleNestedAttribute{\n")
-	b.WriteString(mode)
-	b.WriteString(desc)
+	b.WriteString(ctx.mode)
+	b.WriteString(ctx.desc)
 	b.WriteString(sens)
 	b.WriteString("Attributes: map[string]schema.Attribute{\n")
 	b.WriteString(children)
 	b.WriteString("},\n}")
-	return b.String(), "", nil
+	return renderedAttribute{code: b.String()}, nil
 }
 
-func (g *resourceGenerator) renderArray(file, mode, desc string, at *types.ArrayType, camelPath []string) (string, error) {
-	itemT, itemFile, itemRef, err := g.loader.Resolve(file, at.ItemType)
+func (g *resourceGenerator) renderArray(ctx resolvedAttribute, at *types.ArrayType) (string, error) {
+	item, err := g.loader.resolve(ctx.typeInfo.key.file, at.ItemType)
 	if err != nil {
 		return "", err
 	}
 	listVals := g.listValidators(at)
 
-	if io, ok := itemT.(*types.ObjectType); ok && len(io.Properties) > 0 {
-		key := typeKey{file: itemFile, ref: itemRef}
+	if io, ok := item.t.(*types.ObjectType); ok && len(io.Properties) > 0 {
+		key := item.key
 		if g.visiting[key] {
 			// Cycle: fall back to a dynamic list.
-			g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+			g.goImports.add(importFrameworkTypes)
 			var b strings.Builder
 			b.WriteString("schema.ListAttribute{\n")
-			b.WriteString(mode)
+			b.WriteString(ctx.mode)
 			b.WriteString("ElementType: types.DynamicType,\n")
-			b.WriteString(desc)
+			b.WriteString(ctx.desc)
 			b.WriteString(listVals)
 			b.WriteString("}")
 			return b.String(), nil
@@ -608,14 +567,14 @@ func (g *resourceGenerator) renderArray(file, mode, desc string, at *types.Array
 		g.visiting[key] = true
 		defer delete(g.visiting, key)
 
-		children, err := g.renderChildren(itemFile, io, append(slices.Clone(camelPath), "*"))
+		children, err := g.renderChildren(item.key.file, io, append(slices.Clone(ctx.apiPath), "*"))
 		if err != nil {
 			return "", err
 		}
 		var b strings.Builder
 		b.WriteString("schema.ListNestedAttribute{\n")
-		b.WriteString(mode)
-		b.WriteString(desc)
+		b.WriteString(ctx.mode)
+		b.WriteString(ctx.desc)
 		b.WriteString(listVals)
 		b.WriteString("NestedObject: schema.NestedAttributeObject{\nAttributes: map[string]schema.Attribute{\n")
 		b.WriteString(children)
@@ -623,15 +582,15 @@ func (g *resourceGenerator) renderArray(file, mode, desc string, at *types.Array
 		return b.String(), nil
 	}
 
-	elemType, err := g.attrType(itemFile, itemT)
+	elemType, err := g.attrType(item.key.file, item.t)
 	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
 	b.WriteString("schema.ListAttribute{\n")
-	b.WriteString(mode)
+	b.WriteString(ctx.mode)
 	b.WriteString(fmt.Sprintf("ElementType: %s,\n", elemType))
-	b.WriteString(desc)
+	b.WriteString(ctx.desc)
 	b.WriteString(listVals)
 	b.WriteString("}")
 	return b.String(), nil
@@ -650,7 +609,7 @@ func (g *resourceGenerator) listValidators(at *types.ArrayType) string {
 	if v == "" {
 		return ""
 	}
-	g.imports.add("github.com/hashicorp/terraform-plugin-framework-validators/listvalidator", "")
+	g.goImports.add(importListValidator)
 	return "Validators: []validator.List{\n" + v + "\n},\n"
 }
 
@@ -672,11 +631,11 @@ func (g *resourceGenerator) renderChildren(file string, ot *types.ObjectType, ca
 			prop.Flags = types.TypePropertyFlagsReadOnly
 		}
 		tfName := g.tfName(childPath)
-		code, comment, err := g.renderAttribute(file, prop, childPath)
+		rendered, err := g.renderAttribute(attributeContext{file: file, property: prop, apiPath: childPath})
 		if err != nil {
 			return "", err
 		}
-		entry := attrEntry{tfName: tfName, code: code, comment: comment, mode: modeOf(prop.Flags)}
+		entry := attrEntry{tfName: tfName, code: rendered.code, comment: rendered.comment, mode: modeOf(prop.Flags)}
 		switch entry.mode {
 		case modeRequired:
 			required = append(required, entry)
@@ -710,56 +669,56 @@ func (g *resourceGenerator) renderChildren(file string, ot *types.ObjectType, ca
 // -----------------------------------------------------------------------------
 
 func (g *resourceGenerator) attrType(file string, t types.Type) (string, error) {
-	return g.attrTypeGuarded(file, t, map[typeKey]bool{})
+	return g.attrTypeGuarded(file, t, map[bicepTypeKey]bool{})
 }
 
-func (g *resourceGenerator) attrTypeGuarded(file string, t types.Type, seen map[typeKey]bool) (string, error) {
+func (g *resourceGenerator) attrTypeGuarded(file string, t types.Type, seen map[bicepTypeKey]bool) (string, error) {
 	switch tt := t.(type) {
 	case *types.StringType, *types.StringLiteralType:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+		g.goImports.add(importFrameworkTypes)
 		return "types.StringType", nil
 	case *types.IntegerType:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+		g.goImports.add(importFrameworkTypes)
 		return "types.Int64Type", nil
 	case *types.BooleanType:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+		g.goImports.add(importFrameworkTypes)
 		return "types.BoolType", nil
 	case *types.AnyType, *types.BuiltInType, *types.DiscriminatedObjectType:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+		g.goImports.add(importFrameworkTypes)
 		return "types.DynamicType", nil
 	case *types.UnionType:
 		if _, stringish := g.unionStrings(file, tt); stringish {
-			g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+			g.goImports.add(importFrameworkTypes)
 			return "types.StringType", nil
 		}
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+		g.goImports.add(importFrameworkTypes)
 		return "types.DynamicType", nil
 	case *types.ArrayType:
-		itemT, itemFile, _, err := g.loader.Resolve(file, tt.ItemType)
+		item, err := g.loader.resolve(file, tt.ItemType)
 		if err != nil {
 			return "", err
 		}
-		et, err := g.attrTypeGuarded(itemFile, itemT, seen)
+		et, err := g.attrTypeGuarded(item.key.file, item.t, seen)
 		if err != nil {
 			return "", err
 		}
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+		g.goImports.add(importFrameworkTypes)
 		return fmt.Sprintf("types.ListType{ElemType: %s}", et), nil
 	case *types.ObjectType:
 		if len(tt.Properties) == 0 && tt.AdditionalProperties != nil {
-			elemT, elemFile, _, err := g.loader.Resolve(file, tt.AdditionalProperties)
+			element, err := g.loader.resolve(file, tt.AdditionalProperties)
 			if err != nil {
 				return "", err
 			}
-			et, err := g.attrTypeGuarded(elemFile, elemT, seen)
+			et, err := g.attrTypeGuarded(element.key.file, element.t, seen)
 			if err != nil {
 				return "", err
 			}
-			g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+			g.goImports.add(importFrameworkTypes)
 			return fmt.Sprintf("types.MapType{ElemType: %s}", et), nil
 		}
 		if len(tt.Properties) == 0 {
-			g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+			g.goImports.add(importFrameworkTypes)
 			return "types.DynamicType", nil
 		}
 		names := make([]string, 0, len(tt.Properties))
@@ -768,22 +727,22 @@ func (g *resourceGenerator) attrTypeGuarded(file string, t types.Type, seen map[
 		}
 		sort.Strings(names)
 		var b strings.Builder
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/attr", "")
+		g.goImports.add(importFrameworkTypes)
+		g.goImports.add(importAttr)
 		b.WriteString("types.ObjectType{AttrTypes: map[string]attr.Type{\n")
 		for _, name := range names {
-			ct, cfile, cref, err := g.loader.Resolve(file, tt.Properties[name].Type)
+			child, err := g.loader.resolve(file, tt.Properties[name].Type)
 			if err != nil {
 				return "", err
 			}
 			// Cycle protection for nested object attrType construction.
-			ckey := typeKey{file: cfile, ref: cref}
+			ckey := child.key
 			if seen[ckey] {
 				fmt.Fprintf(&b, "%q: types.DynamicType,\n", modelconv.ToSnakeCaseSmart(name))
 				continue
 			}
 			seen[ckey] = true
-			et, err := g.attrTypeGuarded(cfile, ct, seen)
+			et, err := g.attrTypeGuarded(child.key.file, child.t, seen)
 			delete(seen, ckey)
 			if err != nil {
 				return "", err
@@ -793,7 +752,7 @@ func (g *resourceGenerator) attrTypeGuarded(file string, t types.Type, seen map[
 		b.WriteString("}}")
 		return b.String(), nil
 	default:
-		g.imports.add("github.com/hashicorp/terraform-plugin-framework/types", "")
+		g.goImports.add(importFrameworkTypes)
 		return "types.DynamicType", nil
 	}
 }
