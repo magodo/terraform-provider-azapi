@@ -94,8 +94,8 @@ func (g *resourceGenerator) includePath(apiPath []string) bool {
 	return include
 }
 
-// modeof categorises a property by its bicep flags.
-func modeof(flags types.TypePropertyFlags) Mode {
+// modeOf categorises a property by its bicep flags.
+func modeOf(flags types.TypePropertyFlags) Mode {
 	switch {
 	case flags&types.TypePropertyFlagsRequired != 0:
 		return Required
@@ -202,7 +202,7 @@ func (g *resourceGenerator) build() (*Schema, *types.ResourceType, error) {
 		}
 		attr := &Attribute{Name: g.tfName(apiPath), Comment: comment, Type: attrType}
 
-		switch modeof(prop.Flags) {
+		switch modeOf(prop.Flags) {
 		case Required:
 			required = append(required, attr)
 		case Optional:
@@ -264,7 +264,7 @@ func (g *resourceGenerator) buildAttribute(ctx attributeContext) (AttributeType,
 		return nil, "", err
 	}
 
-	mode := modeof(ctx.property.Flags)
+	mode := modeOf(ctx.property.Flags)
 	desc := ctx.property.Description
 
 	// Whether the subtree rooted at this attribute must be Computed-only: it is
@@ -384,7 +384,7 @@ func (g *resourceGenerator) buildObject(behavior Mode, desc string, typeInfo bic
 
 	key := typeInfo.key
 	if g.visiting[key] {
-		log.Printf("[WARN] visited type %v at %v", typeInfo, apiPath)
+		log.Printf("[WARN] visited type %v at %v", typeInfo.key, apiPath)
 		// Self-referential type. Emit a dynamic attribute to break the cycle.
 		return DynamicAttr{Mode: behavior, Description: desc, Sensitive: sensitive},
 			"dynamic: self-referential object type", nil
@@ -456,7 +456,7 @@ func (g *resourceGenerator) buildArray(behavior Mode, desc string, typeInfo bice
 	if io, ok := item.t.(*types.ObjectType); ok && len(io.Properties) > 0 {
 		key := item.key
 		if g.visiting[key] {
-			log.Printf("[WARN] visited type %v at %v", typeInfo, apiPath)
+			log.Printf("[WARN] visited type %v at %v", key, apiPath)
 			// Cycle: fall back to a dynamic list.
 			return ListAttr{
 				Mode:        behavior,
@@ -528,7 +528,7 @@ func (g *resourceGenerator) buildChildren(file string, ot *types.ObjectType, cam
 			return nil, err
 		}
 		entry := &Attribute{Name: g.tfName(childPath), Comment: comment, Type: attrType}
-		switch modeof(prop.Flags) {
+		switch modeOf(prop.Flags) {
 		case Required:
 			required = append(required, entry)
 		case Optional:
@@ -546,7 +546,9 @@ func (g *resourceGenerator) buildChildren(file string, ot *types.ObjectType, cam
 	out = append(out, optional...)
 	out = append(out, computedAttrs...)
 	return out, nil
-} // -----------------------------------------------------------------------------
+}
+
+// -----------------------------------------------------------------------------
 // attr.Type expressions (ElementType of list/map attributes)
 // -----------------------------------------------------------------------------
 
