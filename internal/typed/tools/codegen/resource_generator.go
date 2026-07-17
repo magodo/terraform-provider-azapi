@@ -14,10 +14,6 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 )
 
-// resource_generator.go implements the BUILD phase of the codegen pipeline: it
-// walks the bicep types and produces the schema IR (see ir.go). It emits no Go
-// source; that is the job of the RENDER phase (see render.go).
-
 type resourceGenerator struct {
 	loader bicepTypeLoader
 
@@ -64,12 +60,21 @@ func newResourceGenerator(options resourceGeneratorOptions) (*resourceGenerator,
 	}, nil
 }
 
-// alwaysIgnoreAttributes lists API (camelCase) property names that are
-// unconditionally excluded from the generated schema at any nesting level.
-var alwaysIgnoreAttributes = map[string]bool{
+// Bicep API attributes to ignore at any level.
+var ignoreAttributesAnyLevel = map[string]bool{
 	"etag":              true,
 	"provisioningState": true,
 	"systemData":        true,
+}
+
+// Bicep API attributes to ignore at top level.
+// Note some of them are ignored because they have a specialized & fixed schema.
+var ignoreAttributesTopLevel = map[string]bool{
+	"type":       true,
+	"apiVersion": true,
+	"name":       true, // rendered as the fixed "name" attribute
+	"id":         true, // rendered as the fixed "id" attribute
+	"location":   true, // rendered as the fixed "location" attribute (when present)
 }
 
 // includePath reports whether the attribute at the given API path should be
@@ -77,7 +82,7 @@ var alwaysIgnoreAttributes = map[string]bool{
 func (g *resourceGenerator) includePath(apiPath []string) bool {
 	// Always ignore certain attributes at any nesting level.
 	if len(apiPath) > 0 {
-		if alwaysIgnoreAttributes[apiPath[len(apiPath)-1]] {
+		if ignoreAttributesAnyLevel[apiPath[len(apiPath)-1]] {
 			return false
 		}
 	}
@@ -168,21 +173,11 @@ func (g *resourceGenerator) build() (*Schema, *types.ResourceType, error) {
 
 	_, hasLocation := body.Properties["location"]
 
-	// Top-level bicep resource properties that we skip to convert to TF schema,
-	// either because we don't export them or they have special rendering.
-	var skipTopLevel = map[string]bool{
-		"type":       true,
-		"apiVersion": true,
-		"name":       true, // rendered as the fixed "name" attribute
-		"id":         true, // rendered as the fixed "id" attribute
-		"location":   true, // rendered as the fixed "location" attribute (when present)
-	}
-
 	// Build the body-derived attributes (everything except the special ones),
 	// bucketed by behavior so that we can emit them in the desired order.
 	var required, optional, computed []*Attribute
 	for name, prop := range body.Properties {
-		if skipTopLevel[name] {
+		if ignoreAttributesTopLevel[name] {
 			continue
 		}
 		apiPath := []string{name}
