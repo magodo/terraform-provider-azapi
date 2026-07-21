@@ -181,9 +181,35 @@ func (r AzApiVirtualNetworkResource) GetSchema(ctx context.Context) schema.Schem
 							},
 						},
 					},
+					"flow_logs": schema.ListNestedAttribute{
+						Computed:            true,
+						MarkdownDescription: "A collection of references to flow log resources.",
+						NestedObject: schema.NestedAttributeObject{
+							Attributes: map[string]schema.Attribute{
+								"id": schema.StringAttribute{
+									Computed:            true,
+									MarkdownDescription: "Resource ID.",
+								},
+							},
+						},
+					},
 					"resource_guid": schema.StringAttribute{
 						Computed:            true,
 						MarkdownDescription: "The resourceGuid property of the Virtual Network resource.",
+					},
+				},
+			},
+			"extended_location": schema.SingleNestedAttribute{
+				Optional:            true,
+				MarkdownDescription: "The extended location of the virtual network.",
+				Attributes: map[string]schema.Attribute{
+					"name": schema.StringAttribute{
+						Optional:            true,
+						MarkdownDescription: "The name of the extended location.",
+					},
+					"type": schema.StringAttribute{
+						Optional:            true,
+						MarkdownDescription: "The type of the extended location.",
 					},
 				},
 			},
