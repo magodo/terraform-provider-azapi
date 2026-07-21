@@ -7,11 +7,12 @@
 // schema and lifecycle behavior belongs in a sibling, hand-written resource
 // file.
 //
-// See internal/typed/README.md for the wider workflow.
-//
 // Usage:
 //
 //	codegen resource --api-type <ResourceType>@<ApiVersion> --tf-type <azapi_xxx> [options]
+//
+// See package [github.com/Azure/terraform-provider-azapi/internal/typed]
+// for the wider workflow.
 package main
 
 import (

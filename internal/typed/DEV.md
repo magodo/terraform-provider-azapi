@@ -68,10 +68,12 @@ For complex type, e.g. NestedAttribute, simply marking as O+C is not enough. The
 
 # TODO
 
--[ ] Codegen
+-[X] Framework: More behavior extension via implementing additional interfaces
 -[ ] Framework: Update check HasChanged for each root level attribute.
 -[ ] Framework: Support identity
 -[ ] Framework: Support write-only attribute handling
--[X] Framework: More behavior extension via implementing additional interfaces
 -[ ] Framework: Support data source
+-[ ] Codegen
 -[ ] Support bicep polymorphic models
+-[ ] Doc gen
+-[ ] Test framework

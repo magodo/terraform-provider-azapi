@@ -237,7 +237,7 @@ func (r resourceWrapper) read(ctx context.Context, id parse.ResourceId, state *t
 	apiRespAny, err := r.meta.ResourceClient.Get(ctx, id.AzureResourceId, id.ApiVersion, clients.DefaultRequestOptions())
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
-			diags.Append(DiagResourceNotFound)
+			diags.Append(diagResourceNotFound)
 			return diags
 		}
 		diags.AddError("failed to read", err.Error())
@@ -292,7 +292,7 @@ func (r resourceWrapper) Read(ctx context.Context, req resource.ReadRequest, res
 
 	// Read the resource
 	if diags := r.read(ctx, *id, &resp.State); diags.HasError() {
-		if errs := diags.Errors(); len(errs) == 1 && errs[0] == DiagResourceNotFound {
+		if errs := diags.Errors(); len(errs) == 1 && errs[0] == diagResourceNotFound {
 			r.Warn(ctx, "resource is not found, remove the resource from the state")
 			resp.State.RemoveResource(ctx)
 			return
