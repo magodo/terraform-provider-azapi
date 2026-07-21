@@ -1,3 +1,17 @@
+// Command codegen generates static typed AzAPI resources from the Azure bicep
+// types.
+//
+// Given a single API type at a single API version, it emits a vanilla
+// "<name>_resource_gen.go" whose schema mirrors the API model. The generated
+// code is meant to be committed as-is and never hand-edited; customization of
+// schema and lifecycle behavior belongs in a sibling, hand-written resource
+// file.
+//
+// See internal/typed/README.md for the wider workflow.
+//
+// Usage:
+//
+//	codegen resource --api-type <ResourceType>@<ApiVersion> --tf-type <azapi_xxx> [options]
 package main
 
 import (
