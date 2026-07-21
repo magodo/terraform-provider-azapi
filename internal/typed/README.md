@@ -54,6 +54,8 @@ The developer is supposed to finalize the complete CLI invocation and put it to 
 //go:generate go run ../../tools/codegen resource --api-type "Microsoft.Storage/storageAccounts/blobServices@2025-06-01" --tf-type "azapi_storage_account_blob_service"
 ```
 
+Then you can simply run `go generate ./internal/typed/...` to (re)generate all the registered resources (Note: running `go generate` under the project root will involve other time-consuming generate tasks).
+
 ## 2. Customize the Resource 
 
 Based on the actual Azure bicep types quality/correctness, as well as the corresponding API behavior, we might have to adjust facts of the generated resource above. These changes shall be reside in a sibiling file named `<name>_resource.go` besides the `<name>_resource_gen.go`.
