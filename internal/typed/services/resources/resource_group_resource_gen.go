@@ -1,10 +1,9 @@
-package resource
+package resources
 
 import (
 	"context"
-
-
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
+	"github.com/Azure/terraform-provider-azapi/internal/typed/customtypes"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/framework"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/servicehooks"
@@ -50,7 +49,8 @@ func (r AzApiResourceGroupResource) GetSchema(ctx context.Context) schema.Schema
 				},
 			},
 			"location": schema.StringAttribute{
-				Required: true,
+				CustomType: customtypes.LocationType{},
+				Required:   true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},

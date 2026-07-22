@@ -1,4 +1,4 @@
-package resource
+package resources
 
 import (
 	"github.com/Azure/terraform-provider-azapi/internal/typed/framework"

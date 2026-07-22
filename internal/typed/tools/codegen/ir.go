@@ -34,9 +34,13 @@ type AttributeType interface{ attributeType() }
 
 // StringAttr -> schema.StringAttribute.
 type StringAttr struct {
-	Mode          Mode
-	Description   string
-	Sensitive     bool
+	Mode        Mode
+	Description string
+	Sensitive   bool
+	// CustomType, when non-empty, is the Go expression for the attribute's
+	// CustomType (e.g. "customtypes.LocationType{}"). It maps to the
+	// schema.StringAttribute.CustomType field.
+	CustomType    string
 	PlanModifiers []StringPlanModifier
 	Validators    []StringValidator
 }

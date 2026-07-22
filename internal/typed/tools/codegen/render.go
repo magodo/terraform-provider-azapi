@@ -30,6 +30,7 @@ var (
 	importContext            = goImport{path: "context"}
 	importRegexp             = goImport{path: "regexp"}
 	importMyValidator        = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"}
+	importCustomTypes        = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/typed/customtypes"}
 	importFramework          = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/typed/framework"}
 	importModelConv          = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/typed/modelconv"}
 	importServiceHooks       = goImport{path: "github.com/Azure/terraform-provider-azapi/internal/typed/servicehooks"}
@@ -135,8 +136,12 @@ func specialName() *Attribute {
 }
 
 func specialLocation() *Attribute {
+	// The "location" attribute uses a dedicated CustomType so that its behavior
+	// (e.g. semantic equality across casing/spacing) can be changed globally in
+	// one place (see internal/typed/customtypes) without regenerating resources.
 	return &Attribute{Name: "location", Type: StringAttr{
 		Mode:          Required,
+		CustomType:    "customtypes.LocationType{}",
 		PlanModifiers: []StringPlanModifier{RequiresReplace{}},
 	}}
 }
@@ -211,6 +216,10 @@ func (g *resourceGenerator) renderAttributeType(t AttributeType) string {
 func (g *resourceGenerator) renderStringAttr(a StringAttr) string {
 	var b strings.Builder
 	b.WriteString("schema.StringAttribute{\n")
+	if a.CustomType != "" {
+		g.goImports.add(importCustomTypes)
+		fmt.Fprintf(&b, "CustomType: %s,\n", a.CustomType)
+	}
 	b.WriteString(behaviorLine(a.Mode))
 	b.WriteString(descLine(a.Description))
 	b.WriteString(sensitiveLine(a.Sensitive))

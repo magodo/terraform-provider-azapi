@@ -21,7 +21,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services/functions"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/services/network"
-	resourcesvc "github.com/Azure/terraform-provider-azapi/internal/typed/services/resource"
+	"github.com/Azure/terraform-provider-azapi/internal/typed/services/resources"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/services/storage"
 	"github.com/Azure/terraform-provider-azapi/version"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
@@ -766,7 +766,7 @@ func (p Provider) DataSources(ctx context.Context) []func() datasource.DataSourc
 }
 
 func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
-	resources := []func() resource.Resource{
+	rl := []func() resource.Resource{
 		func() resource.Resource {
 			return &services.AzapiResource{}
 		},
@@ -782,16 +782,16 @@ func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
 	}
 
 	registrations := []func() []func() resource.Resource{
-		resourcesvc.Resources,
+		resources.Resources,
 		network.Resources,
 		storage.Resources,
 	}
 
 	for _, reg := range registrations {
-		resources = append(resources, reg()...)
+		rl = append(rl, reg()...)
 	}
 
-	return resources
+	return rl
 }
 
 func (p Provider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
