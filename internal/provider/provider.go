@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/terraform-provider-azapi/internal/services/functions"
 	"github.com/Azure/terraform-provider-azapi/internal/services/myvalidator"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/services/network"
+	resourcesvc "github.com/Azure/terraform-provider-azapi/internal/typed/services/resource"
 	"github.com/Azure/terraform-provider-azapi/internal/typed/services/storage"
 	"github.com/Azure/terraform-provider-azapi/version"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
@@ -781,6 +782,7 @@ func (p Provider) Resources(ctx context.Context) []func() resource.Resource {
 	}
 
 	registrations := []func() []func() resource.Resource{
+		resourcesvc.Resources,
 		network.Resources,
 		storage.Resources,
 	}
