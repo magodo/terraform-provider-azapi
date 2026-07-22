@@ -6,8 +6,8 @@ Codegen reads from bicep types, which contains the basic API information (inc. A
 
 The developer's main jobs are:
 
-- Improve user experience in terms of validation, description, etc, which can be overriden programmably in a file besides `foo_resource_gen.go`), by enhancing the vanilla resource schema.
-- For API special behavior, the developer should be also available to inject additional code to mitigate
+- Improve user experience in terms of validation, description, etc, which can be overridden programmatically in a file besides `foo_resource_gen.go`), by enhancing the vanilla resource schema.
+- For API special behavior, the developer should also be able to inject additional code to mitigate
 
 In this process, the codegen shall take minimal input and solely just generate a vanilla resource implementation. Keep the customization programmable along side the generated source code.
 
@@ -17,7 +17,7 @@ The expand and flatten shall be a generic implementation that covers all the sce
 
 The first question is should this be a static or a dynamic implementation. We chose dynamic to cost minor performance for smaller size and cleaner codebase.
 
-With this, we shall cover different nuances during expand/flatten to adopt to the target API behavior in terms of null/absent/zero value.
+With this, we shall cover different nuances during expand/flatten to adapt to the target API behavior in terms of null/absent/zero value.
 
 ## Expand
 
@@ -37,7 +37,7 @@ Instead of making this an expand config, we shall simply declare the TF attribut
 
 ## Flatten
 
-When we meet the API response, it is tempting that we need to do the reverse as Expand. But there is a slight difference: Both `null` and absent in API response ends up to be TF value of `null` (as TF regards `null` and absense the same). This means we actually don't need flatten config.
+When we meet the API response, it is tempting that we need to do the reverse as Expand. But there is a slight difference: Both `null` and absent in API response ends up to be TF value of `null` (as TF regards `null` and absence the same). This means we actually don't need flatten config.
 
 Again for the "zero" value case, we regard zero value has no difference than other known values. If there causes a diff due to the config/plan has a null value, it is reasonable enough to mark that attribute O+C, which reflects the actual API behavior (takes null returns zero).
 
@@ -55,7 +55,7 @@ The plan is to keep the customization at the post-codegen phase while with hint 
 
 It is common in Azure that if the request doesn't specify an attribute, the API still returns a default value.
 
-For primary type, you have multiple choices:
+For primitive type, you have multiple choices:
 
 - Marking the attribute O+C. This will not only succeed the first apply, it will also make the second plan show no diff as long as there is no "legit" diff, otherwise, this attribute will be shown as `(known after apply)` unless you also set the plan modifier to use state for null.
 - Adding a default value in the schema (not necessarily have to be the same value as what the API returns). Though you still need to mark it as O+C.
