@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/entrauth"
+	pkcs12 "software.sslmate.com/src/go-pkcs12"
 )
 
 type Option struct {
@@ -40,10 +41,12 @@ type Option struct {
 	UseOIDCTokenFile bool
 	OIDCTokenFile    string
 
-	UseOIDCTokenRequest    bool
-	OIDCRequestToken       string
-	OIDCRequestURL         string
-	ADOServiceConnectionId string
+	UseOIDCTokenRequest      bool
+	OIDCRequestToken         string
+	OIDCRequestURL           string
+	ADOServiceConnectionId   string
+	ManagedIdentityClientId  string
+	ManagedIdentityOIDCScope string
 
 	UseMSI         bool
 	UseAzureCLI    bool
@@ -114,11 +117,21 @@ func (opt Option) getClientCert() ([]*x509.Certificate, crypto.PrivateKey, error
 		return nil, nil, fmt.Errorf("no client certificate available")
 	}
 	certs, key, err := azidentity.ParseCertificates(certData, opt.ClientCertPassword)
+	if err == nil {
+		return certs, key, nil
+	}
+
+	if opt.Logger != nil {
+		opt.Logger.Printf("warning: azidentity failed to parse client certificate (%v), falling back to the pkcs12 parser", err)
+	}
+	privateKey, cert, caCerts, err := pkcs12.DecodeChain(certData, string(opt.ClientCertPassword))
 	if err != nil {
 		return nil, nil, fmt.Errorf(`failed to parse client certificate": %v`, err)
 	}
 
-	return certs, key, nil
+	parsedCerts := []*x509.Certificate{cert}
+	parsedCerts = append(parsedCerts, caCerts...)
+	return parsedCerts, privateKey, nil
 }
 
 func (opt Option) buildOIDCTokenCredOpt() (entrauth.CredentialOption, error) {
@@ -173,9 +186,12 @@ func (opt Option) buildOIDCTokenReqCredOpt() (entrauth.CredentialOption, error) 
 		return nil, err
 	}
 
-	// Based on whether the ADO service connection ID is specified, we choose to use either
-	// the ADO flow or Github flow.
-	if opt.ADOServiceConnectionId != "" {
+	// Based on the precense of ADOServiceConnectionId and ManagedIdentityClientId,
+	// we choose to use among ADO OIDC, MI OIDC and Github OIDC.
+	switch {
+	case opt.ADOServiceConnectionId != "" && opt.ManagedIdentityClientId != "":
+		return nil, fmt.Errorf(`only one of "ADOServiceConnectionId" and "ManagedIdentityClientId" can be specified`)
+	case opt.ADOServiceConnectionId != "":
 		return entrauth.AssertionRequestCredentialOption{
 			Type: entrauth.AssertionRequestTypeAzureDevOps,
 			PlatformOption: entrauth.AssertionRequestAzureDevOpsCredentialOption{
@@ -190,7 +206,22 @@ func (opt Option) buildOIDCTokenReqCredOpt() (entrauth.CredentialOption, error) 
 				Cache:                      opt.Cache,
 			},
 		}, nil
-	} else {
+	case opt.ManagedIdentityClientId != "":
+		return entrauth.AssertionRequestCredentialOption{
+			Type: entrauth.AssertionRequestTypeManagedIdentity,
+			PlatformOption: entrauth.AssertionRequestManagedIdentityCredentialOption{
+				ClientId:                 *clientId,
+				TenantId:                 *tenantId,
+				ManagedIdentityClientId:  opt.ManagedIdentityClientId,
+				ManagedIdentityOIDCScope: opt.ManagedIdentityOIDCScope,
+
+				ClientOptions:              opt.ClientOptions,
+				AdditionallyAllowedTenants: opt.AdditionallyAllowedTenants,
+				DisableInstanceDiscovery:   opt.DisableInstanceDiscovery,
+				Cache:                      opt.Cache,
+			},
+		}, nil
+	default:
 		return entrauth.AssertionRequestCredentialOption{
 			Type: entrauth.AssertionRequestTypeGithub,
 			PlatformOption: entrauth.AssertionRequestGithubCredentialOption{
