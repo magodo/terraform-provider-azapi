@@ -73,7 +73,6 @@ type providerData struct {
 	OIDCTokenFilePath            types.String `tfsdk:"oidc_token_file_path"`
 	OIDCAzureServiceConnectionID types.String `tfsdk:"oidc_azure_service_connection_id"`
 	UseOIDC                      types.Bool   `tfsdk:"use_oidc"`
-	UseManagedIdentityOIDC       types.Bool   `tfsdk:"use_managed_identity_oidc"`
 	ManagedIdentityClientID      types.String `tfsdk:"managed_identity_client_id"`
 	UseCLI                       types.Bool   `tfsdk:"use_cli"`
 	UseMSI                       types.Bool   `tfsdk:"use_msi"`
@@ -206,14 +205,9 @@ func (p Provider) Schema(ctx context.Context, request provider.SchemaRequest, re
 				MarkdownDescription: "Should the Provider skip registering the Resource Providers it supports? This can also be sourced from the `ARM_SKIP_PROVIDER_REGISTRATION` Environment Variable. Defaults to `false`.",
 			},
 
-			"use_managed_identity_oidc": schema.BoolAttribute{
-				Optional:            true,
-				MarkdownDescription: "Authenticate the application specified by `client_id` using a federated managed identity. This can also be sourced from `ARM_USE_MANAGED_IDENTITY_OIDC`. Defaults to `false`.",
-			},
-
 			"managed_identity_client_id": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "The client ID of the user-assigned managed identity trusted by the application's federated identity credential. Required when `use_managed_identity_oidc` is `true`. This can also be sourced from `ARM_MANAGED_IDENTITY_CLIENT_ID`.",
+				MarkdownDescription: "The client ID of the user-assigned managed identity trusted by the application's federated identity credential. This can also be sourced from `ARM_MANAGED_IDENTITY_CLIENT_ID`.",
 			},
 
 			"oidc_request_token": schema.StringAttribute{
@@ -515,9 +509,6 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		}
 	}
 
-	if model.UseManagedIdentityOIDC.IsNull() {
-		model.UseManagedIdentityOIDC = types.BoolValue(os.Getenv("ARM_USE_MANAGED_IDENTITY_OIDC") == "true")
-	}
 	if model.ManagedIdentityClientID.IsNull() {
 		model.ManagedIdentityClientID = types.StringValue(os.Getenv("ARM_MANAGED_IDENTITY_CLIENT_ID"))
 	}
@@ -876,7 +867,7 @@ func buildChainedTokenCredential(model providerData, clientOpt azcore.ClientOpti
 		OIDCToken:                  model.OIDCToken.ValueString(),
 		UseOIDCTokenFile:           model.UseOIDC.ValueBool() || model.UseAKSWorkloadIdentity.ValueBool(),
 		OIDCTokenFile:              model.OIDCTokenFilePath.ValueString(),
-		UseOIDCTokenRequest:        model.UseOIDC.ValueBool() || model.UseManagedIdentityOIDC.ValueBool(),
+		UseOIDCTokenRequest:        model.UseOIDC.ValueBool(),
 		OIDCRequestToken:           model.OIDCRequestToken.ValueString(),
 		OIDCRequestURL:             model.OIDCRequestURL.ValueString(),
 		ADOServiceConnectionId:     model.OIDCAzureServiceConnectionID.ValueString(),
