@@ -205,6 +205,7 @@ func (p Provider) Schema(ctx context.Context, request provider.SchemaRequest, re
 				MarkdownDescription: "Should the Provider skip registering the Resource Providers it supports? This can also be sourced from the `ARM_SKIP_PROVIDER_REGISTRATION` Environment Variable. Defaults to `false`.",
 			},
 
+			// OIDC specific fields
 			"managed_identity_client_id": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "The client ID of the user-assigned managed identity trusted by the application's federated identity credential. This can also be sourced from `ARM_MANAGED_IDENTITY_CLIENT_ID`.",
