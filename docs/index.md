@@ -62,6 +62,7 @@ provider "azapi" {
 - `client_secret` (String) The Client Secret which should be used. This can also be sourced from the `ARM_CLIENT_SECRET` Environment Variable.
 - `client_secret_file_path` (String) The path to a file containing the Client Secret which should be used. For use When authenticating as a Service Principal using a Client Secret. This can also be sourced from the `ARM_CLIENT_SECRET_FILE_PATH` Environment Variable.
 - `custom_correlation_request_id` (String) The value of the `x-ms-correlation-request-id` header, otherwise an auto-generated UUID will be used. This can also be sourced from the `ARM_CORRELATION_REQUEST_ID` environment variable.
+- `custom_headers` (Map of String) The custom headers that will be sent in the out going requests by each resource client
 - `default_location` (String) The default Azure Region where the azure resource should exist. The `location` in each resource block can override the `default_location`. Changing this forces new resources to be created.
 - `default_name` (String) The default name to create the azure resource. The `name` in each resource block can override the `default_name`. Changing this forces new resources to be created.
 - `default_tags` (Map of String) A mapping of tags which should be assigned to the azure resource as default tags. The `tags` in each resource block can override the `default_tags`.
