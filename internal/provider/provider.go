@@ -73,6 +73,7 @@ type providerData struct {
 	OIDCTokenFilePath            types.String `tfsdk:"oidc_token_file_path"`
 	OIDCAzureServiceConnectionID types.String `tfsdk:"oidc_azure_service_connection_id"`
 	UseOIDC                      types.Bool   `tfsdk:"use_oidc"`
+	ManagedIdentityClientID      types.String `tfsdk:"managed_identity_client_id"`
 	UseCLI                       types.Bool   `tfsdk:"use_cli"`
 	UseMSI                       types.Bool   `tfsdk:"use_msi"`
 	UseAKSWorkloadIdentity       types.Bool   `tfsdk:"use_aks_workload_identity"`
@@ -205,6 +206,11 @@ func (p Provider) Schema(ctx context.Context, request provider.SchemaRequest, re
 			},
 
 			// OIDC specific fields
+			"managed_identity_client_id": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "The client ID of the user-assigned managed identity trusted by the application's federated identity credential. This can also be sourced from `ARM_MANAGED_IDENTITY_CLIENT_ID`.",
+			},
+
 			"oidc_request_token": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "The bearer token for the request to the OIDC provider. This can also be sourced from the `ARM_OIDC_REQUEST_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, or `SYSTEM_ACCESSTOKEN` Environment Variables.",
@@ -502,6 +508,10 @@ func (p Provider) Configure(ctx context.Context, request provider.ConfigureReque
 		} else if v := os.Getenv("AZURESUBSCRIPTION_SERVICE_CONNECTION_ID"); v != "" {
 			model.OIDCAzureServiceConnectionID = types.StringValue(v)
 		}
+	}
+
+	if model.ManagedIdentityClientID.IsNull() {
+		model.ManagedIdentityClientID = types.StringValue(os.Getenv("ARM_MANAGED_IDENTITY_CLIENT_ID"))
 	}
 
 	if model.UseOIDC.IsNull() {
@@ -841,7 +851,7 @@ func buildChainedTokenCredential(model providerData, clientOpt azcore.ClientOpti
 		}
 	}
 
-	cred, err := aztfauth.NewCredential(aztfauth.Option{
+	opt := aztfauth.Option{
 		Logger:                     log.New(log.Default().Writer(), "[DEBUG] ", log.LstdFlags|log.Lmsgprefix),
 		TenantId:                   model.TenantID.ValueString(),
 		ClientId:                   model.ClientID.ValueString(),
@@ -862,14 +872,15 @@ func buildChainedTokenCredential(model providerData, clientOpt azcore.ClientOpti
 		OIDCRequestToken:           model.OIDCRequestToken.ValueString(),
 		OIDCRequestURL:             model.OIDCRequestURL.ValueString(),
 		ADOServiceConnectionId:     model.OIDCAzureServiceConnectionID.ValueString(),
+		ManagedIdentityClientId:    model.ManagedIdentityClientID.ValueString(),
 		UseMSI:                     model.UseMSI.ValueBool(),
 		UseAzureCLI:                model.UseCLI.ValueBool(),
 		ClientOptions:              clientOpt,
 		AdditionallyAllowedTenants: auxTenants,
 		DisableInstanceDiscovery:   model.DisableInstanceDiscovery.ValueBool(),
-	})
+	}
 
-	return cred, err
+	return aztfauth.NewCredential(opt)
 }
 
 func (p *Provider) RenderOption() tffwdocs.ProviderRenderOption {

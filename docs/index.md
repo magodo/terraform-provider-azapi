@@ -62,6 +62,7 @@ provider "azapi" {
 - `client_secret` (String) The Client Secret which should be used. This can also be sourced from the `ARM_CLIENT_SECRET` Environment Variable.
 - `client_secret_file_path` (String) The path to a file containing the Client Secret which should be used. For use When authenticating as a Service Principal using a Client Secret. This can also be sourced from the `ARM_CLIENT_SECRET_FILE_PATH` Environment Variable.
 - `custom_correlation_request_id` (String) The value of the `x-ms-correlation-request-id` header, otherwise an auto-generated UUID will be used. This can also be sourced from the `ARM_CORRELATION_REQUEST_ID` environment variable.
+- `custom_headers` (Map of String) The custom headers that will be sent in the out going requests by each resource client
 - `default_location` (String) The default Azure Region where the azure resource should exist. The `location` in each resource block can override the `default_location`. Changing this forces new resources to be created.
 - `default_name` (String) The default name to create the azure resource. The `name` in each resource block can override the `default_name`. Changing this forces new resources to be created.
 - `default_tags` (Map of String) A mapping of tags which should be assigned to the azure resource as default tags. The `tags` in each resource block can override the `default_tags`.
@@ -79,6 +80,7 @@ provider "azapi" {
 
 	-> Value must be one of: ["public" "usgovernment" "china" "custom"].
 - `ignore_no_op_changes` (Boolean) Ignore no-op changes for `azapi_resource`. The default is true. When set to true, the provider will suppress changes in the `azapi_resource` if the `body` in the new API version still matches the remote state. When set to false, the provider will not suppress these changes. This can also be sourced from the `ARM_IGNORE_NO_OP_CHANGES` Environment Variable.
+- `managed_identity_client_id` (String) The client ID of the user-assigned managed identity trusted by the application's federated identity credential. This can also be sourced from `ARM_MANAGED_IDENTITY_CLIENT_ID`.
 - `maximum_busy_retry_attempts` (Int32) DEPRECATED - The maximum number of retries to attempt if the Azure API returns an HTTP 408, 429, 500, 502, 503, or 504 response. The default is `32767`, this allows the provider to rely on the resource timeout values rather than a maximum retry count. The resource-specific retry configuration may additionally be used to retry on other errors and conditions. This property will be removed in a future version.
 - `oidc_azure_service_connection_id` (String) The Azure Pipelines Service Connection ID to use for authentication. This can also be sourced from the `ARM_ADO_PIPELINE_SERVICE_CONNECTION_ID`, `ARM_OIDC_AZURE_SERVICE_CONNECTION_ID`, or `AZURESUBSCRIPTION_SERVICE_CONNECTION_ID` Environment Variables.
 - `oidc_request_token` (String) The bearer token for the request to the OIDC provider. This can also be sourced from the `ARM_OIDC_REQUEST_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, or `SYSTEM_ACCESSTOKEN` Environment Variables.
