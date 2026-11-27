@@ -76,7 +76,7 @@ resource "azapi_data_plane_resource" "dataset" {
 	~> If the value of this attribute changes, Terraform will destroy and recreate the resource.
 
 	-> String length must be at least 1.
-- `type` (String) In a format like `<resource-type>@<api-version>`. `<resource-type>` is the Azure resource type, for example, `Microsoft.Storage/storageAccounts`. `<api-version>` is version of the API used to manage this azure resource.
+- `type` (String) In a format like `<resource-type>@<api-version>`. `<resource-type>` is the Azure resource type, for example, `Microsoft.Storage/storageAccounts`. `<api-version>` is version of the API used to manage this azure resource. For a list of supported data plane resource types, see the [Available Resources](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/data_plane_resource#available-resources) documentation.
 
 	-> Ensure this in resource type format: `<resource-type>@<api-version>`.
 
@@ -104,8 +104,8 @@ resource "azapi_data_plane_resource" "dataset" {
 - `read_headers` (Map of String) A mapping of headers to be sent with the read request.
 - `read_query_parameters` (Map of List of String) A mapping of query parameters to be sent with the read request.
 - `replace_triggers_external_values` (Dynamic) Will trigger a replace of the resource when the value changes and is not `null`. This can be used by practitioners to force a replace of the resource when certain values change, e.g. changing the SKU of a virtual machine based on the value of variables or locals. The value is a `dynamic`, so practitioners can compose the input however they wish. For a "break glass" set the value to `null` to prevent the plan modifier taking effect.
-If you have `null` values that you do want to be tracked as affecting the resource replacement, include these inside an object.
-Advanced use cases are possible and resource replacement can be triggered by values external to the resource, for example when a dependent resource changes.
+	If you have `null` values that you do want to be tracked as affecting the resource replacement, include these inside an object.
+	Advanced use cases are possible and resource replacement can be triggered by values external to the resource, for example when a dependent resource changes.
 
 	e.g. to replace a resource when either the SKU or os_type attributes change:
 
@@ -119,7 +119,7 @@ Advanced use cases are possible and resource replacement can be triggered by val
 	      zones = var.zones
 	    }
 	  }
-	
+
 	  replace_triggers_external_values = [
 	    var.sku,
 	    var.zones,
@@ -161,7 +161,7 @@ Advanced use cases are possible and resource replacement can be triggered by val
 
 	~> Use the state value when new value is functionally equivalent to the old and thus no change is required.
 - `retry` (Object) The retry object supports the following attributes: See [below for nested schema](#nested--retry).
-- `sensitive_body` (Dynamic, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) A dynamic attribute that contains the write-only properties of the request body. This will be merge-patched to the body to construct the actual request body.
+- `sensitive_body` (Dynamic, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) A dynamic attribute that contains the write-only properties of the request body. This will be merge-patched to the body to construct the actual request body. If a property is defined in both `body` and `sensitive_body`, the `sensitive_body` value takes precedence.
 - `sensitive_body_version` (Map of String) A map where the key is the path to the property in `sensitive_body` and the value is the version of the property. The key is a string in the format of `path.to.property[index].subproperty`, where `index` is the index of the item in an array. When the version is changed, the property will be included in the request body, otherwise it will be omitted from the request body.
 - `timeouts` (Block) See [below for nested schema](#nested--timeouts).
 - `update_headers` (Map of String) A mapping of headers to be sent with the update request.
@@ -266,6 +266,7 @@ Optional:
 | Microsoft.IoTCentral/iotApps/devices/relationships | /devices/{deviceId}/relationships/{relationshipId} | {appSubdomain}.azureiotcentral.com/devices/{deviceId}                                       |
 | Microsoft.IoTCentral/iotApps/enrollmentGroups | /enrollmentGroups/{enrollmentGroupId} | {appSubdomain}.azureiotcentral.com                                                          |
 | Microsoft.IoTCentral/iotApps/enrollmentGroups/certificates | /enrollmentGroups/{enrollmentGroupId}/certificates/{entry} | {appSubdomain}.azureiotcentral.com/enrollmentGroups/{enrollmentGroupId}                     |
+| Microsoft.KeyVault/vaults/certificates | /certificates/{certificate-name} | {vaultName}.vault.azure.net                                                                 |
 | Microsoft.KeyVault/vaults/certificates/contacts | /certificates/contacts | {vaultName}.vault.azure.net                                                                 |
 | Microsoft.KeyVault/vaults/certificates/issuers | /certificates/issuers/{issuer-name} | {vaultName}.vault.azure.net                                                                 |
 | Microsoft.KeyVault/vaults/keys | /keys/{key-name} | {vaultName}.vault.azure.net                                                                 |
@@ -618,6 +619,114 @@ resource "azapi_data_plane_resource" "example" {
 }
 ```
 
+### Microsoft.KeyVault/vaults/certificates
+
+```terraform
+terraform {
+  required_providers {
+    azapi = {
+      source = "Azure/azapi"
+    }
+  }
+}
+
+provider "azapi" {
+}
+
+variable "resource_name" {
+  type    = string
+  default = "acctest0001"
+}
+
+variable "location" {
+  type    = string
+  default = "westeurope"
+}
+
+data "azapi_client_config" "current" {}
+
+locals {
+  key_vault_certificates_officer_role_id = "/subscriptions/${data.azapi_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/a4417e6f-fecd-4de8-b567-7b0420556985"
+}
+
+resource "azapi_resource" "resourceGroup" {
+  type     = "Microsoft.Resources/resourceGroups@2021-04-01"
+  name     = var.resource_name
+  location = var.location
+}
+
+resource "azapi_resource" "vault" {
+  type      = "Microsoft.KeyVault/vaults@2026-02-01"
+  parent_id = azapi_resource.resourceGroup.id
+  name      = var.resource_name
+  location  = azapi_resource.resourceGroup.location
+  body = {
+    properties = {
+      sku = {
+        family = "A"
+        name   = "standard"
+      }
+      tenantId                  = data.azapi_client_config.current.tenant_id
+      enableRbacAuthorization   = true
+      enabledForDiskEncryption  = true
+      softDeleteRetentionInDays = 7
+      accessPolicies            = []
+    }
+  }
+  response_export_values = {
+    vaultUri = "properties.vaultUri"
+  }
+}
+
+resource "azapi_resource" "keyVaultCertificatesOfficer" {
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  parent_id = azapi_resource.vault.id
+  name      = uuidv5("url", "${azapi_resource.vault.id}/${data.azapi_client_config.current.object_id}/${local.key_vault_certificates_officer_role_id}")
+  body = {
+    properties = {
+      principalId      = data.azapi_client_config.current.object_id
+      roleDefinitionId = local.key_vault_certificates_officer_role_id
+    }
+  }
+}
+
+resource "azapi_data_plane_resource" "certificate" {
+  type      = "Microsoft.KeyVault/vaults/certificates@7.5"
+  parent_id = trimsuffix(trimprefix(azapi_resource.vault.output.vaultUri, "https://"), "/")
+  name      = "${var.resource_name}-certificate"
+  body = {
+    policy = {
+      issuer = {
+        name = "Self"
+      }
+      key_props = {
+        exportable = true
+        kty        = "RSA"
+        key_size   = 2048
+        reuse_key  = false
+      }
+      secret_props = {
+        contentType = "application/x-pkcs12"
+      }
+      x509_props = {
+        subject         = "CN=contoso.com"
+        validity_months = 12
+      }
+    }
+  }
+
+  retry = {
+    error_message_regex  = ["Forbidden", "Unauthorized", "authorization"]
+    interval_seconds     = 10
+    max_interval_seconds = 60
+  }
+
+  depends_on = [
+    azapi_resource.keyVaultCertificatesOfficer
+  ]
+}
+```
+
 ### Microsoft.KeyVault/vaults/certificates/issuers
 
 ```terraform
@@ -632,18 +741,32 @@ terraform {
 provider "azapi" {
 }
 
+variable "resource_name" {
+  type    = string
+  default = "acctest0001"
+}
+
+variable "location" {
+  type    = string
+  default = "westeurope"
+}
+
 data "azapi_client_config" "current" {}
+
+locals {
+  key_vault_certificates_officer_role_id = "/subscriptions/${data.azapi_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/a4417e6f-fecd-4de8-b567-7b0420556985"
+}
 
 resource "azapi_resource" "resourceGroup" {
   type     = "Microsoft.Resources/resourceGroups@2021-04-01"
-  name     = "example-resources"
-  location = "westeurope"
+  name     = var.resource_name
+  location = var.location
 }
 
 resource "azapi_resource" "vault" {
-  type      = "Microsoft.KeyVault/vaults@2023-02-01"
+  type      = "Microsoft.KeyVault/vaults@2026-02-01"
   parent_id = azapi_resource.resourceGroup.id
-  name      = "examplekeyvault"
+  name      = var.resource_name
   location  = azapi_resource.resourceGroup.location
   body = {
     properties = {
@@ -652,42 +775,33 @@ resource "azapi_resource" "vault" {
         name   = "standard"
       }
       tenantId                  = data.azapi_client_config.current.tenant_id
+      enableRbacAuthorization   = true
       enabledForDiskEncryption  = true
       softDeleteRetentionInDays = 7
-      enablePurgeProtection     = false
       accessPolicies            = []
     }
-  }
-  schema_validation_enabled = false
-  lifecycle {
-    ignore_changes = [body.properties.accessPolicies]
   }
   response_export_values = {
     vaultUri = "properties.vaultUri"
   }
 }
 
-resource "azapi_resource_action" "add_accesspolicy" {
-  type        = "Microsoft.KeyVault/vaults/accessPolicies@2023-02-01"
-  resource_id = "${azapi_resource.vault.id}/accessPolicies/add"
-  method      = "PUT"
+resource "azapi_resource" "keyVaultCertificatesOfficer" {
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  parent_id = azapi_resource.vault.id
+  name      = uuidv5("url", "${azapi_resource.vault.id}/${data.azapi_client_config.current.object_id}/${local.key_vault_certificates_officer_role_id}")
   body = {
     properties = {
-      accessPolicies = [{
-        tenantId = data.azapi_client_config.current.tenant_id
-        objectId = data.azapi_client_config.current.object_id
-        permissions = {
-          certificates = ["managecontacts", "getissuers", "setissuers", "deleteissuers"]
-        }
-      }]
+      principalId      = data.azapi_client_config.current.object_id
+      roleDefinitionId = local.key_vault_certificates_officer_role_id
     }
   }
 }
 
 resource "azapi_data_plane_resource" "example" {
-  type      = "Microsoft.KeyVault/vaults/certificates/issuers@7.4"
+  type      = "Microsoft.KeyVault/vaults/certificates/issuers@7.5"
   parent_id = trimsuffix(trimprefix(azapi_resource.vault.output.vaultUri, "https://"), "/")
-  name      = "exampleissuer"
+  name      = "${var.resource_name}-issuer"
   body = {
     provider = "Test"
     credentials = {
@@ -705,8 +819,14 @@ resource "azapi_data_plane_resource" "example" {
     }
   }
 
+  retry = {
+    error_message_regex  = ["Forbidden", "Unauthorized", "authorization"]
+    interval_seconds     = 10
+    max_interval_seconds = 60
+  }
+
   depends_on = [
-    azapi_resource_action.add_accesspolicy
+    azapi_resource.keyVaultCertificatesOfficer
   ]
 }
 ```
@@ -737,6 +857,10 @@ variable "location" {
 
 data "azapi_client_config" "current" {}
 
+locals {
+  key_vault_secrets_officer_role_id = "/subscriptions/${data.azapi_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
+}
+
 resource "azapi_resource" "resourceGroup" {
   type     = "Microsoft.Resources/resourceGroups@2020-06-01"
   name     = var.resource_name
@@ -744,7 +868,7 @@ resource "azapi_resource" "resourceGroup" {
 }
 
 resource "azapi_resource" "vault" {
-  type      = "Microsoft.KeyVault/vaults@2023-02-01"
+  type      = "Microsoft.KeyVault/vaults@2026-02-01"
   parent_id = azapi_resource.resourceGroup.id
   name      = var.resource_name
   location  = azapi_resource.resourceGroup.location
@@ -755,42 +879,32 @@ resource "azapi_resource" "vault" {
         name   = "standard"
       }
       tenantId                  = data.azapi_client_config.current.tenant_id
+      enableRbacAuthorization   = true
       enableSoftDelete          = true
       softDeleteRetentionInDays = 7
       enablePurgeProtection     = true
       accessPolicies            = []
     }
   }
-  schema_validation_enabled = false
-  lifecycle {
-    ignore_changes = [body.properties.accessPolicies]
-  }
   response_export_values = {
     "vaultUri" = "properties.vaultUri"
   }
 }
 
-resource "azapi_resource_action" "add_accesspolicy_secret" {
-  type        = "Microsoft.KeyVault/vaults/accessPolicies@2023-02-01"
-  resource_id = "${azapi_resource.vault.id}/accessPolicies/add"
-  method      = "PUT"
+resource "azapi_resource" "keyVaultSecretsOfficer" {
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  parent_id = azapi_resource.vault.id
+  name      = uuidv5("url", "${azapi_resource.vault.id}/${data.azapi_client_config.current.object_id}/${local.key_vault_secrets_officer_role_id}")
   body = {
     properties = {
-      accessPolicies = [{
-        tenantId = data.azapi_client_config.current.tenant_id
-        objectId = data.azapi_client_config.current.object_id
-        permissions = {
-          secrets = [
-            "Get", "List", "Set", "Delete", "Recover", "Backup", "Restore", "Purge"
-          ]
-        }
-      }]
+      principalId      = data.azapi_client_config.current.object_id
+      roleDefinitionId = local.key_vault_secrets_officer_role_id
     }
   }
 }
 
 resource "azapi_data_plane_resource" "secret" {
-  type      = "Microsoft.KeyVault/vaults/secrets@7.4"
+  type      = "Microsoft.KeyVault/vaults/secrets@7.5"
   parent_id = trimsuffix(trimprefix(azapi_resource.vault.output.vaultUri, "https://"), "/")
   name      = var.resource_name
   body = {
@@ -800,8 +914,14 @@ resource "azapi_data_plane_resource" "secret" {
     }
   }
 
+  retry = {
+    error_message_regex  = ["Forbidden", "Unauthorized", "authorization"]
+    interval_seconds     = 10
+    max_interval_seconds = 60
+  }
+
   depends_on = [
-    azapi_resource_action.add_accesspolicy_secret
+    azapi_resource.keyVaultSecretsOfficer
   ]
 }
 ```

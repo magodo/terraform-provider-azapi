@@ -8,9 +8,11 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
+	armruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/arm/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/terraform-provider-azapi/internal/features"
 )
 
@@ -40,6 +42,7 @@ type Option struct {
 	CustomHeaders               http.Header
 	AuxiliaryTenants            []string
 	MaxGoSdkRetries             int32
+	AlwaysAcquirePolicyToken    bool
 }
 
 // NOTE: it should be possible for this method to become Private once the top level Client's removed
@@ -64,6 +67,7 @@ func (client *Client) Build(ctx context.Context, o *Option) error {
 	}
 	perRetryPolicies := make([]policy.Policy, 0)
 	perRetryPolicies = append(perRetryPolicies, NewLiveTrafficLogPolicy())
+	perRetryPolicies = append(perRetryPolicies, newUTF8BOMPolicy())
 
 	allowedHeaders := []string{
 		"Access-Control-Allow-Methods",
@@ -93,6 +97,35 @@ func (client *Client) Build(ctx context.Context, o *Option) error {
 		"$skipToken",
 	}
 
+	resourceManagerEndpoint := cloud.AzurePublic.Services[cloud.ResourceManager].Endpoint
+	if c, ok := o.CloudCfg.Services[cloud.ResourceManager]; ok {
+		resourceManagerEndpoint = c.Endpoint
+	}
+
+	acquirePipeline, err := armruntime.NewPipeline(moduleName, moduleVersion, o.Cred, runtime.PipelineOptions{}, &arm.ClientOptions{
+		ClientOptions: policy.ClientOptions{
+			Cloud: o.CloudCfg,
+			// Disable the default telemetry policy, because it has a length limitation for user agent
+			Telemetry: policy.TelemetryOptions{
+				Disabled: true,
+			},
+			Logging: policy.LogOptions{
+				IncludeBody:        false,
+				AllowedHeaders:     allowedHeaders,
+				AllowedQueryParams: allowedQueryParams,
+			},
+			PerCallPolicies:  perCallPolicies,
+			PerRetryPolicies: perRetryPolicies,
+			Retry:            policy.RetryOptions{MaxRetries: o.MaxGoSdkRetries},
+		},
+		AuxiliaryTenants:      o.AuxiliaryTenants,
+		DisableRPRegistration: o.SkipProviderRegistration,
+	})
+	if err != nil {
+		return err
+	}
+	perCallPolicies = append(perCallPolicies, NewAcquirePolicyTokenPolicy(acquirePipeline, resourceManagerEndpoint, o.SubscriptionId, o.AlwaysAcquirePolicyToken))
+
 	resourceClient, err := NewResourceClient(o.Cred, &arm.ClientOptions{
 		ClientOptions: policy.ClientOptions{
 			Cloud: o.CloudCfg,
@@ -101,7 +134,7 @@ func (client *Client) Build(ctx context.Context, o *Option) error {
 				Disabled: true,
 			},
 			Logging: policy.LogOptions{
-				IncludeBody:        true,
+				IncludeBody:        false,
 				AllowedHeaders:     allowedHeaders,
 				AllowedQueryParams: allowedQueryParams,
 			},
@@ -125,7 +158,7 @@ func (client *Client) Build(ctx context.Context, o *Option) error {
 				Disabled: true,
 			},
 			Logging: policy.LogOptions{
-				IncludeBody:        true,
+				IncludeBody:        false,
 				AllowedHeaders:     allowedHeaders,
 				AllowedQueryParams: allowedQueryParams,
 			},

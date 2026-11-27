@@ -1,3 +1,57 @@
+## v2.13.0
+
+ENHANCEMENTS:
+
+- `LOG_SENSITIVE_DATA` env var to log request and response body (GH-1245).
+- ChainedTokenCredential: Improved retry policy (GH-1243).
+- `azapi_update_resource`: read_override property for APIs that require POST for fetches (GH-1170).
+- KeyVault: Updated examples to use RBAC and 2026-02-01 API version (GH-1230).
+- `azapi_data_plane_resource`: Support data source and ephemeral resource (GH-1199).
+- Update bicep types to Azure/azure-rest-api-specs revision 0744f52a86919d243ba2225e55bdb9c87bf521a5 (GH-1197).
+
+BUG FIXES:
+
+- Propagate resource headers to LRO polls (GH-1220).
+- `azapi_data_plane_resource`: Apply retry logic to existence check (GH-1229).
+- API version index skips: Added Microsoft.Portal/dashboards 2026-04-01, removed Microsoft.Keyvault 2026-02-01 and 2026-03-01-preview (GH-1223).
+- Fix retries for resource existence checks (GH-1193).
+
+## v2.12.0
+
+ENHANCEMENTS:
+
+- `azapi` provider: Support `preserve_resource_id_casing` feature flag (default `false`). When enabled, if the resource ID the provider would write back to state differs from the existing state value only by casing, the existing casing is preserved. This avoids spurious `Unexpected Identity Change` errors and diffs when consumers (or upstream modules) rely on a specific casing the Azure API may not preserve. Only the `id` and `resource_id` attributes are affected. Can also be sourced from the `ARM_PRESERVE_RESOURCE_ID_CASING` environment variable (GH-1122).
+- `azapi` provider: Publish official windows_arm64 provider binaries (GH-1148).
+- `azapi_resource` resource: Re-introduce the `ignore_body_changes` property to ignore changes to specified fields in the request body (GH-1192).
+- `azapi_data_plane_resource` resource: Allow `name` to be optional based on the URL format (GH-1178).
+- `azapi_data_plane_resource` resource: Support Key Vault certificates (GH-1174).
+
+BUG FIXES:
+
+- Strip UTF-8 BOM prefix from JSON responses (GH-1190).
+- Preserve `azapi_resource` state for an in-flight Create interrupted by SIGINT (GH-1183).
+- Fix `MoveState` target identity for `azurerm` resource moves (GH-1175).
+- Fix OIDC token file path logic (GH-1164).
+
+## v2.11.0
+
+ENHANCEMENTS:
+
+- `azapi_resource_action` resource: Support sensitive body for resource actions (GH-1150).
+- `azapi_resource`: Import now falls back to up to three most recent indexed API versions when a 400 or 404 response is returned without an explicit `api-version` (GH-1093).
+- `azapi` provider: Support PFX modern encryption for client certificate authentication (GH-1151).
+- `azapi` client: Return the last retryable error instead of `context deadline exceeded` when retries fail (GH-1079).
+- Acquire a policy token when a request is blocked by an invoke policy (GH-1145).
+- Update bicep types to Azure/azure-rest-api-specs revision 51d53915b5f31b10e6645c136807b9d95f9f09d1 (GH-1159).
+- Improve the bicep types update process (GH-1155).
+
+BUG FIXES:
+
+- Fix `Missing Resource Identity After Read` after upgrading from v2.7.0 when a resource is deleted outside Terraform (GH-1050).
+- Fix `azapi_resource_action` output handling when updating existing actions (GH-1158).
+- Fix `azapi_resource_action` output being set incorrectly while the action is executing (GH-1168).
+- Fix `ResourceClient CreateOrUpdate` to return the initial PUT body correctly (GH-1160).
+
 ## v2.10.0
 
 ENHANCEMENTS:
@@ -7,6 +61,10 @@ ENHANCEMENTS:
 - Bump Go version to 1.25.8 (GH-1082).
 - Bump `terraform-plugin-framework` from v1.16.1 to v1.19.0 (GH-1081).
 - Add example for `Microsoft.RedHatOpenShift/openShiftClusters` (GH-1083).
+
+BUG FIXES:
+
+- Fix a panic when comparing a non-empty configured list with an empty remote list during no-op change detection (GH-1125).
 
 ## v2.9.0
 

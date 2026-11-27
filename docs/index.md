@@ -9,6 +9,36 @@ description: |-
 
 The AzAPI provider is a very thin layer on top of the [Azure ARM REST APIs](https://learn.microsoft.com/rest/api/azure). This provider complements the [AzureRM provider](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs) by enabling the management of Azure resources that are not yet or may never be supported in the AzureRM provider such as private/public preview services and features.
 
+Following example highlight the main differences between AzAPI and AzureRM for a storage account resource:
+
+```hcl
+# AzAPI
+# API version can be specified in the type attribute
+# the body attribute maps to the REST API payload
+resource "azapi_resource" "sa1" {
+  type      = "Microsoft.Storage/storageAccounts@2025-06-01"
+  parent_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/myResourceGroup"
+  name      = "mysa1"
+  location  = "westus"
+
+  body = {
+    "kind" = "StorageV2"
+    "sku" = {
+      name = "Standard_RAGRS"
+    }
+  }
+}
+
+# AzureRM
+resource "azurerm_storage_account" "sa1" {
+  name                     = "mysa1"
+  resource_group_name      = "myResourceGroup"
+  location                 = "westus"
+  account_tier             = "Standard"
+  account_replication_type = "RAGRS"
+}
+```
+
 Documentation regarding the [Data Sources](/docs/configuration/data-sources.html) and [Resources](/docs/configuration/resources.html) supported by the AzAPI Provider can be found in the navigation to the left.
 
 Interested in the provider's latest features, or want to make sure you're up to date? Check out the [changelog](https://github.com/Azure/terraform-provider-azapi/blob/main/CHANGELOG.md) for version information and release notes.
@@ -51,6 +81,7 @@ provider "azapi" {
 
 ### Optional
 
+- `always_acquire_policy_token` (Boolean) Always acquire a policy token for write requests, regardless of whether one is required. The default is `false`. The default behaviour is to wait for a qualifying `403` response indicating that a policy token is required, and then retry the request with an acquired policy token. When this attribute is set to `true`, the provider proactively acquires a policy token and attaches it to every write request, avoiding the extra round-trip per request. Performance will be improved if the number of changed resources is known to be large beforehand. This can also be sourced from the `ARM_ALWAYS_ACQUIRE_POLICY_TOKEN` Environment Variable. See [Feature: Acquire Policy Token](guides/feature_acquire_policy_token.html) to learn more.
 - `auxiliary_tenant_ids` (List of String) List of auxiliary Tenant IDs required for multi-tenancy and cross-tenant scenarios. This can also be sourced from the `ARM_AUXILIARY_TENANT_IDS` Environment Variable.
 
 	-> List must contain at most 3 elements.
@@ -90,6 +121,7 @@ provider "azapi" {
 - `partner_id` (String) A GUID/UUID that is [registered](https://docs.microsoft.com/azure/marketplace/azure-partner-customer-usage-attribution#register-guids-and-offers) with Microsoft to facilitate partner resource usage attribution. This can also be sourced from the `ARM_PARTNER_ID` Environment Variable.
 
 	-> Value must satisfy at least one of the validations: ensure this in UUID format + string length must be at most 0.
+- `preserve_resource_id_casing` (Boolean) Preserve the existing casing of the resource ID in state. The default is false. When set to true, if the resource ID the provider would write back to state differs from the value already in state only by casing, the existing casing is kept. This is useful when consumers of the resource ID (or the `azapi_resource` identity) require a specific casing that the Azure API may not preserve. This only affects the `id` (and `resource_id`) attributes; other properties are unaffected. This can also be sourced from the `ARM_PRESERVE_RESOURCE_ID_CASING` Environment Variable.
 - `skip_provider_registration` (Boolean) Should the Provider skip registering the Resource Providers it supports? This can also be sourced from the `ARM_SKIP_PROVIDER_REGISTRATION` Environment Variable. Defaults to `false`.
 - `subscription_id` (String) The Subscription ID which should be used. This can also be sourced from the `ARM_SUBSCRIPTION_ID` Environment Variable.
 - `tenant_id` (String) The Tenant ID should be used. This can also be sourced from the `ARM_TENANT_ID` Environment Variable.

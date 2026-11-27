@@ -98,6 +98,9 @@ output "quarantine_policy" {
 - `delete_headers` (Map of String) A mapping of headers to be sent with the delete request.
 - `delete_query_parameters` (Map of List of String) A mapping of query parameters to be sent with the delete request.
 - `identity` (List of Block) The identity of this resource. See [below for nested schema](#nested--identity).
+- `ignore_body_changes` (List of String, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) A list of paths in the resource body whose changes should be ignored. Prefer Terraform's `lifecycle.ignore_changes` when possible. Use this argument only when the paths must be derived from variables or other non-static values. Changes to this argument take effect only after an apply because its value is stored in provider-private state. Paths use dot notation, for example `properties.sku.name`. Individual list items cannot be targeted, ignore the entire list property instead. Configuration changes at an ignored path will not be sent to Azure until that path is removed from this list. This write-only argument requires Terraform 1.11 or later.
+
+	-> Element value must satisfy all validations: string length must be at least 1.
 - `ignore_casing` (Boolean) Whether ignore the casing of the property names in the response body. Defaults to `false`.
 - `ignore_missing_property` (Boolean) Whether ignore not returned properties like credentials in `body` to suppress plan-diff. It's recommend to enable this option when some sensitive properties are not returned in response body, instead of setting them in `lifecycle.ignore_changes` because it will make the sensitive fields unable to update. Defaults to `true`.
 - `ignore_null_property` (Boolean) When set to `true`, the provider will ignore properties whose values are `null` in the `body`. These properties will not be included in the request body sent to the API, and the difference will not be shown in the plan output. Defaults to `false`.
@@ -132,8 +135,8 @@ output "quarantine_policy" {
 - `read_headers` (Map of String) A mapping of headers to be sent with the read request.
 - `read_query_parameters` (Map of List of String) A mapping of query parameters to be sent with the read request.
 - `replace_triggers_external_values` (Dynamic) Will trigger a replace of the resource when the value changes and is not `null`. This can be used by practitioners to force a replace of the resource when certain values change, e.g. changing the SKU of a virtual machine based on the value of variables or locals. The value is a `dynamic`, so practitioners can compose the input however they wish. For a "break glass" set the value to `null` to prevent the plan modifier taking effect.
-If you have `null` values that you do want to be tracked as affecting the resource replacement, include these inside an object.
-Advanced use cases are possible and resource replacement can be triggered by values external to the resource, for example when a dependent resource changes.
+	If you have `null` values that you do want to be tracked as affecting the resource replacement, include these inside an object.
+	Advanced use cases are possible and resource replacement can be triggered by values external to the resource, for example when a dependent resource changes.
 
 	e.g. to replace a resource when either the SKU or os_type attributes change:
 
@@ -148,7 +151,7 @@ Advanced use cases are possible and resource replacement can be triggered by val
 	      zones = var.zones
 	    }
 	  }
-	
+
 	  replace_triggers_external_values = [
 	    var.sku,
 	    var.zones,
@@ -191,7 +194,7 @@ Advanced use cases are possible and resource replacement can be triggered by val
 	~> Use the state value when new value is functionally equivalent to the old and thus no change is required.
 - `retry` (Object) The retry object supports the following attributes: See [below for nested schema](#nested--retry).
 - `schema_validation_enabled` (Boolean) Whether enabled the validation on `type` and `body` with embedded schema. Defaults to `true`.
-- `sensitive_body` (Dynamic, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) A dynamic attribute that contains the write-only properties of the request body. This will be merge-patched to the body to construct the actual request body.
+- `sensitive_body` (Dynamic, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) A dynamic attribute that contains the write-only properties of the request body. This will be merge-patched to the body to construct the actual request body. If a property is defined in both `body` and `sensitive_body`, the `sensitive_body` value takes precedence.
 - `sensitive_body_version` (Map of String) A map where the key is the path to the property in `sensitive_body` and the value is the version of the property. The key is a string in the format of `path.to.property[index].subproperty`, where `index` is the index of the item in an array. When the version is changed, the property will be included in the request body, otherwise it will be omitted from the request body.
 - `tags` (Map of String) A mapping of tags which should be assigned to the Azure resource.
 
@@ -338,3 +341,7 @@ Required:
 Optional:
 
 - `type` (String) The Azure resource type.
+
+### API Version for Initial Import Call
+
+While processing an import request, the provider cannot determine which api-version to use for the initial import GET call. To work around this, the provider falls back to the 3 most recent [indexed](https://github.com/Azure/terraform-provider-azapi/blob/main/internal/azure/generated/index.json) api-versions (regardless of preview / stable), trying each in turn. The provider treats any 400 or 404 response as a signal to attempt the next older version. This fallback can result in an api-version mismatch; to avoid it, specify an explicit api-version using the `api-version` query parameter or the resource `type` attribute.

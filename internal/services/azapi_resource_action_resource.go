@@ -26,7 +26,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -44,6 +43,8 @@ type ActionResourceModel struct {
 	Action                        types.String     `tfsdk:"action"`
 	Method                        types.String     `tfsdk:"method"`
 	Body                          types.Dynamic    `tfsdk:"body"`
+	SensitiveBody                 types.Dynamic    `tfsdk:"sensitive_body"`
+	SensitiveBodyVersion          types.Map        `tfsdk:"sensitive_body_version"`
 	When                          types.String     `tfsdk:"when"`
 	Locks                         types.List       `tfsdk:"locks"`
 	IgnoreNotFound                types.Bool       `tfsdk:"ignore_not_found"`
@@ -62,11 +63,13 @@ type ActionResource struct {
 	ProviderData *clients.Client
 }
 
-var _ resource.Resource = &ActionResource{}
-var _ resource.ResourceWithConfigure = &ActionResource{}
-var _ resource.ResourceWithModifyPlan = &ActionResource{}
-var _ resource.ResourceWithUpgradeState = &ActionResource{}
-var _ tffwdocs.ResourceWithRenderOption = &ActionResource{}
+var (
+	_ resource.Resource                 = &ActionResource{}
+	_ resource.ResourceWithConfigure    = &ActionResource{}
+	_ resource.ResourceWithModifyPlan   = &ActionResource{}
+	_ resource.ResourceWithUpgradeState = &ActionResource{}
+	_ tffwdocs.ResourceWithRenderOption = &ActionResource{}
+)
 
 func (r *ActionResource) Configure(ctx context.Context, request resource.ConfigureRequest, response *resource.ConfigureResponse) {
 	if v, ok := request.ProviderData.(*clients.Client); ok {
@@ -82,6 +85,7 @@ func (r *ActionResource) UpgradeState(ctx context.Context) map[int64]resource.St
 	return map[int64]resource.StateUpgrader{
 		0: migration.AzapiResourceActionMigrationV0ToV2(ctx),
 		1: migration.AzapiResourceActionMigrationV1ToV2(ctx),
+		2: migration.AzapiResourceActionMigrationV2ToV3(ctx),
 	}
 }
 
@@ -171,6 +175,18 @@ func (r *ActionResource) Schema(ctx context.Context, request resource.SchemaRequ
 				},
 			},
 
+			"sensitive_body": schema.DynamicAttribute{
+				Optional:            true,
+				WriteOnly:           true,
+				MarkdownDescription: docstrings.SensitiveBody(),
+			},
+
+			"sensitive_body_version": schema.MapAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				MarkdownDescription: docstrings.SensitiveBodyVersion(),
+			},
+
 			"when": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
@@ -211,10 +227,7 @@ func (r *ActionResource) Schema(ctx context.Context, request resource.SchemaRequ
 				MarkdownDescription: docstrings.ResponseExportValues(),
 			},
 			"exist": schema.BoolAttribute{
-				Computed: true,
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
+				Computed:            true,
 				MarkdownDescription: "Indicates whether the resource action was successfully performed.",
 			},
 
@@ -255,7 +268,7 @@ func (r *ActionResource) Schema(ctx context.Context, request resource.SchemaRequ
 			}),
 		},
 
-		Version: 2,
+		Version: 3,
 	}
 }
 
@@ -273,9 +286,26 @@ func (r *ActionResource) ModifyPlan(ctx context.Context, request resource.Modify
 		return
 	}
 
+	if !config.SensitiveBody.IsNull() && config.When.ValueString() == "destroy" {
+		response.Diagnostics.AddError(
+			"Invalid configuration",
+			`The argument "sensitive_body" is not supported when "when" is set to "destroy", because write-only configuration is not available during the destroy operation.`,
+		)
+		return
+	}
+
+	actionWillRun := plan.When.ValueString() == "apply"
+	// Preserve state by default; set unknown only when an apply-time action is expected.
+	if state != nil {
+		plan.Exist = state.Exist
+	}
+
 	if state == nil || !dynamic.SemanticallyEqual(config.Body, state.Body) {
 		plan.Output = basetypes.NewDynamicUnknown()
 		plan.SensitiveOutput = basetypes.NewDynamicUnknown()
+		if actionWillRun {
+			plan.Exist = basetypes.NewBoolUnknown()
+		}
 	} else {
 		plan.Output = state.Output
 		if !plan.ResponseExportValues.Equal(state.ResponseExportValues) {
@@ -285,14 +315,37 @@ func (r *ActionResource) ModifyPlan(ctx context.Context, request resource.Modify
 		if !plan.SensitiveResponseExportValues.Equal(state.SensitiveResponseExportValues) {
 			plan.SensitiveOutput = basetypes.NewDynamicUnknown()
 		}
+
+		if actionWillRun && !skip.CanSkipExternalRequest(*state, *plan, "update") {
+			// The action response can vary between runs, so output fields must remain unknown until apply.
+			plan.Output = basetypes.NewDynamicUnknown()
+			plan.SensitiveOutput = basetypes.NewDynamicUnknown()
+			plan.Exist = basetypes.NewBoolUnknown()
+		}
+
+		diff, diags := ephemeralBodyChangeInPlan(ctx, request.Private, config.SensitiveBody, config.SensitiveBodyVersion, state.SensitiveBodyVersion)
+		if response.Diagnostics.Append(diags...); response.Diagnostics.HasError() {
+			return
+		}
+		if diff {
+			tflog.Info(ctx, `"sensitive_body" has changed`)
+			plan.Output = basetypes.NewDynamicUnknown()
+			plan.SensitiveOutput = basetypes.NewDynamicUnknown()
+			if actionWillRun {
+				plan.Exist = basetypes.NewBoolUnknown()
+			}
+		}
 	}
 
 	response.Diagnostics.Append(response.Plan.Set(ctx, plan)...)
 }
 
 func (r *ActionResource) Create(ctx context.Context, request resource.CreateRequest, response *resource.CreateResponse) {
-	var model ActionResourceModel
+	var model, config ActionResourceModel
 	if response.Diagnostics.Append(request.Plan.Get(ctx, &model)...); response.Diagnostics.HasError() {
+		return
+	}
+	if response.Diagnostics.Append(request.Config.Get(ctx, &config)...); response.Diagnostics.HasError() {
 		return
 	}
 
@@ -304,7 +357,7 @@ func (r *ActionResource) Create(ctx context.Context, request resource.CreateRequ
 	defer cancel()
 
 	if model.When.ValueString() == "apply" {
-		r.Action(ctx, model, &response.State, &response.Diagnostics)
+		r.Action(ctx, model, config, &response.State, &response.Diagnostics, response.Private, types.MapNull(types.StringType))
 	} else {
 		id, err := parse.ResourceIDWithResourceType(model.ResourceId.ValueString(), model.Type.ValueString())
 		if err != nil {
@@ -324,11 +377,14 @@ func (r *ActionResource) Create(ctx context.Context, request resource.CreateRequ
 }
 
 func (r *ActionResource) Update(ctx context.Context, request resource.UpdateRequest, response *resource.UpdateResponse) {
-	var state, plan ActionResourceModel
+	var state, plan, config ActionResourceModel
 	if response.Diagnostics.Append(request.Plan.Get(ctx, &plan)...); response.Diagnostics.HasError() {
 		return
 	}
 	if response.Diagnostics.Append(request.State.Get(ctx, &state)...); response.Diagnostics.HasError() {
+		return
+	}
+	if response.Diagnostics.Append(request.Config.Get(ctx, &config)...); response.Diagnostics.HasError() {
 		return
 	}
 
@@ -348,7 +404,7 @@ func (r *ActionResource) Update(ctx context.Context, request resource.UpdateRequ
 	tflog.Debug(ctx, "azapi_resource.CreateUpdate proceeding with external request as no skippable changes were detected")
 
 	if plan.When.ValueString() == "apply" {
-		r.Action(ctx, plan, &response.State, &response.Diagnostics)
+		r.Action(ctx, plan, config, &response.State, &response.Diagnostics, response.Private, state.SensitiveBodyVersion)
 	} else {
 		response.Diagnostics.Append(response.State.Set(ctx, plan)...)
 	}
@@ -361,7 +417,7 @@ func (r *ActionResource) Delete(ctx context.Context, request resource.DeleteRequ
 	}
 
 	if model.When.ValueString() == "destroy" {
-		r.Action(ctx, model, &response.State, &response.Diagnostics)
+		r.Action(ctx, model, ActionResourceModel{}, &response.State, &response.Diagnostics, nil, types.MapNull(types.StringType))
 	}
 }
 
@@ -378,7 +434,7 @@ func (r *ActionResource) Read(ctx context.Context, request resource.ReadRequest,
 	response.Diagnostics.Append(response.State.Set(ctx, state)...)
 }
 
-func (r *ActionResource) Action(ctx context.Context, model ActionResourceModel, state *tfsdk.State, diagnostics *diag.Diagnostics) {
+func (r *ActionResource) Action(ctx context.Context, model ActionResourceModel, config ActionResourceModel, state *tfsdk.State, diagnostics *diag.Diagnostics, privateData PrivateData, priorSensitiveBodyVersion types.Map) {
 	actionTimeout, diags := model.Timeouts.Create(ctx, 30*time.Minute)
 	diagnostics.Append(diags...)
 	if diagnostics.HasError() {
@@ -396,9 +452,9 @@ func (r *ActionResource) Action(ctx context.Context, model ActionResourceModel, 
 
 	ctx = tflog.SetField(ctx, "resource_id", id.ID())
 
-	var requestBody interface{}
-	if err := unmarshalBody(model.Body, &requestBody); err != nil {
-		diagnostics.AddError("Invalid body", fmt.Sprintf(`The argument "body" is invalid: %s`, err.Error()))
+	requestBody, err := buildActionRequestBody(model.Body, config.SensitiveBody, model.SensitiveBodyVersion, priorSensitiveBodyVersion)
+	if err != nil {
+		diagnostics.AddError("Invalid request body", err.Error())
 		return
 	}
 
@@ -412,8 +468,8 @@ func (r *ActionResource) Action(ctx context.Context, model ActionResourceModel, 
 	requestOptions := clients.RequestOptions{
 		Headers:         common.AsMapOfString(model.Headers),
 		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.QueryParameters)),
-		RetryOptions:    clients.NewRetryOptions(model.Retry),
 	}
+	requestOptions.RetryOptions, requestOptions.LastRetryError = clients.NewRetryOptions(model.Retry)
 
 	client := r.ProviderData.ResourceClient
 	responseBody, err := client.Action(ctx, id.AzureResourceId, model.Action.ValueString(), id.ApiVersion, model.Method.ValueString(), requestBody, requestOptions)
@@ -449,6 +505,42 @@ func (r *ActionResource) Action(ctx context.Context, model ActionResourceModel, 
 	model.SensitiveOutput = sensitiveOutput
 
 	diagnostics.Append(state.Set(ctx, model)...)
+
+	if privateData != nil {
+		if model.SensitiveBodyVersion.IsNull() {
+			writeOnlyBytes, err := dynamic.ToJSON(config.SensitiveBody)
+			if err != nil {
+				diagnostics.AddError("Invalid sensitive_body", err.Error())
+				return
+			}
+			diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, writeOnlyBytes)...)
+		} else {
+			diagnostics.Append(ephemeralBodyPrivateMgr.Set(ctx, privateData, nil)...)
+		}
+	}
+}
+
+func buildActionRequestBody(body types.Dynamic, sensitiveBody types.Dynamic, sensitiveBodyVersion types.Map, priorSensitiveBodyVersion types.Map) (interface{}, error) {
+	var requestBody interface{}
+	if err := unmarshalBody(body, &requestBody); err != nil {
+		return nil, fmt.Errorf(`the argument "body" is invalid: %s`, err.Error())
+	}
+
+	if sensitiveBody.IsNull() {
+		return requestBody, nil
+	}
+
+	writeOnlyBody, err := unmarshalSensitiveBody(sensitiveBody, sensitiveBodyVersion, priorSensitiveBodyVersion)
+	if err != nil {
+		return nil, fmt.Errorf(`the argument "sensitive_body" is invalid: %s`, err.Error())
+	}
+	if writeOnlyBody == nil {
+		return requestBody, nil
+	}
+	if requestBody == nil {
+		return writeOnlyBody, nil
+	}
+	return utils.MergeObject(requestBody, writeOnlyBody), nil
 }
 
 func (r *ActionResource) RenderOption() tffwdocs.ResourceRenderOption {

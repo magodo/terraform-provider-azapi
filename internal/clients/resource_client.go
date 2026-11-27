@@ -46,6 +46,14 @@ func NewResourceClient(credential azcore.TokenCredential, opt *arm.ClientOptions
 }
 
 func (client *ResourceClient) CreateOrUpdate(ctx context.Context, resourceID string, apiVersion string, body interface{}, options RequestOptions) (interface{}, error) {
+	if len(options.Headers) != 0 {
+		headers := make(http.Header, len(options.Headers))
+		for key, value := range options.Headers {
+			headers.Set(key, value)
+		}
+		ctx = policy.WithHTTPHeader(ctx, headers)
+	}
+
 	// override the default retry options with the ones provided in the options
 	if options.RetryOptions != nil {
 		ctx = policy.WithRetryOptions(ctx, *options.RetryOptions)
@@ -84,27 +92,28 @@ func (client *ResourceClient) CreateOrUpdate(ctx context.Context, resourceID str
 
 	resp, err := client.pl.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, WrapContextError(err, options.LastRetryError)
 	}
 	if !runtime.HasStatusCode(resp, http.StatusOK, http.StatusCreated, http.StatusAccepted) {
 		return nil, runtime.NewResponseError(resp)
 	}
 
 	var responseBody interface{}
+	if err := runtime.UnmarshalAsJSON(resp, &responseBody); err != nil {
+		return nil, err
+	}
+
 	pt, err := runtime.NewPoller[interface{}](resp, client.pl, nil)
 	if err == nil {
-		resp, err := pt.PollUntilDone(ctx, &runtime.PollUntilDoneOptions{
+		_, err := pt.PollUntilDone(ctx, &runtime.PollUntilDoneOptions{
 			Frequency: 10 * time.Second,
 		})
 		if err == nil {
-			return resp, nil
+			return responseBody, nil
 		}
 		if !client.shouldIgnorePollingError(err) {
 			return nil, err
 		}
-	}
-	if err := runtime.UnmarshalAsJSON(resp, &responseBody); err != nil {
-		return nil, err
 	}
 	return responseBody, nil
 }
@@ -143,7 +152,7 @@ func (client *ResourceClient) Get(ctx context.Context, resourceID string, apiVer
 
 	resp, err := client.pl.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, WrapContextError(err, options.LastRetryError)
 	}
 	if !runtime.HasStatusCode(resp, http.StatusOK) {
 		return nil, runtime.NewResponseError(resp)
@@ -190,7 +199,7 @@ func (client *ResourceClient) Delete(ctx context.Context, resourceID string, api
 
 	resp, err := client.pl.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, WrapContextError(err, options.LastRetryError)
 	}
 	if !runtime.HasStatusCode(resp, http.StatusOK, http.StatusAccepted, http.StatusNoContent) {
 		return nil, runtime.NewResponseError(resp)
@@ -258,7 +267,7 @@ func (client *ResourceClient) Action(ctx context.Context, resourceID string, act
 
 	resp, err := client.pl.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, WrapContextError(err, options.LastRetryError)
 	}
 	if !runtime.HasStatusCode(resp, http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent) {
 		return nil, runtime.NewResponseError(resp)
@@ -356,7 +365,7 @@ func (client *ResourceClient) List(ctx context.Context, url string, apiVersion s
 			request.Raw().Header.Set("Accept", "application/json")
 			resp, err := client.pl.Do(request)
 			if err != nil {
-				return nil, err
+				return nil, WrapContextError(err, options.LastRetryError)
 			}
 			if !runtime.HasStatusCode(resp, http.StatusOK) {
 				return nil, runtime.NewResponseError(resp)

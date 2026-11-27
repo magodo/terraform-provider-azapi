@@ -60,6 +60,7 @@ type AzapiUpdateResourceModel struct {
 	UpdateQueryParameters         types.Map        `tfsdk:"update_query_parameters"`
 	ReadHeaders                   types.Map        `tfsdk:"read_headers" skip_on:"update"`
 	ReadQueryParameters           types.Map        `tfsdk:"read_query_parameters" skip_on:"update"`
+	ReadOverride                  types.Object     `tfsdk:"read_override" skip_on:"update"`
 }
 
 type AzapiUpdateResource struct {
@@ -181,24 +182,24 @@ func (r *AzapiUpdateResource) Schema(ctx context.Context, request resource.Schem
 					" The value is a `dynamic`, so practitioners can compose the input however they wish. For a \"break glass\" set the value to `null` to prevent the plan modifier taking effect.\n" +
 					"If you have `null` values that you do want to be tracked as affecting the resource replacement, include these inside an object.\n" +
 					"Advanced use cases are possible and resource replacement can be triggered by values external to the resource, for example when a dependent resource changes.\n\n" +
-					"\te.g. to replace a resource when either the SKU or os_type attributes change:\n\n" +
-					"\t```hcl\n" +
-					"\tresource \"azapi_update_resource\" \"example\" {\n" +
-					"\t  resource_id = \"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example/providers/Microsoft.Network/publicIPAddresses/example\"\n" +
-					"\t  type        = \"Microsoft.Network/publicIPAddresses@2023-11-01\"\n" +
-					"\t  body = {\n" +
-					"\t    properties = {\n" +
-					"\t      sku   = var.sku\n" +
-					"\t      zones = var.zones\n" +
-					"\t    }\n" +
-					"\t  }\n" +
-					"\t\n" +
-					"\t  replace_triggers_external_values = [\n" +
-					"\t    var.sku,\n" +
-					"\t    var.zones,\n" +
-					"\t  ]\n" +
-					"\t}\n" +
-					"\t```\n",
+					"e.g. to replace a resource when either the SKU or os_type attributes change:\n\n" +
+					"```hcl\n" +
+					"resource \"azapi_update_resource\" \"example\" {\n" +
+					"  resource_id = \"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example/providers/Microsoft.Network/publicIPAddresses/example\"\n" +
+					"  type        = \"Microsoft.Network/publicIPAddresses@2023-11-01\"\n" +
+					"  body = {\n" +
+					"    properties = {\n" +
+					"      sku   = var.sku\n" +
+					"      zones = var.zones\n" +
+					"    }\n" +
+					"  }\n" +
+					"\n" +
+					"  replace_triggers_external_values = [\n" +
+					"    var.sku,\n" +
+					"    var.zones,\n" +
+					"  ]\n" +
+					"}\n" +
+					"```\n",
 				PlanModifiers: []planmodifier.Dynamic{
 					planmodifierdynamic.RequiresReplaceIfNotNull(),
 				},
@@ -284,6 +285,8 @@ func (r *AzapiUpdateResource) Schema(ctx context.Context, request resource.Schem
 				Optional:            true,
 				MarkdownDescription: "A mapping of query parameters to be sent with the read request.",
 			},
+
+			"read_override": readOverrideSchema(),
 		},
 
 		Blocks: map[string]schema.Block{
@@ -320,6 +323,9 @@ func (r *AzapiUpdateResource) ValidateConfig(ctx context.Context, request resour
 	}
 	if !config.Name.IsNull() && !config.ResourceID.IsNull() {
 		response.Diagnostics.AddError("Invalid configuration", `Only one of the arguments "name" or "resource_id" can be set`)
+	}
+	if readOverrideConflictsWithSensitiveBody(config.ReadOverride, config.SensitiveBody) {
+		response.Diagnostics.AddError("Invalid configuration", `The argument "read_override" cannot be used with "sensitive_body" because the read response may contain sensitive values that would be stored in state`)
 	}
 	if response.Diagnostics.HasError() {
 		return
@@ -454,9 +460,14 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 	readRequestOptions := clients.RequestOptions{
 		Headers:         common.AsMapOfString(model.ReadHeaders),
 		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
-		RetryOptions:    clients.NewRetryOptions(model.Retry),
 	}
-	existing, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, readRequestOptions)
+	readRequestOptions.RetryOptions, readRequestOptions.LastRetryError = clients.NewRetryOptions(model.Retry)
+	readOverride, readDiags := readOverrideFromObject(ctx, model.ReadOverride)
+	diagnostics.Append(readDiags...)
+	if diagnostics.HasError() {
+		return
+	}
+	existing, err := readResource(ctx, client, id.AzureResourceId, id.ApiVersion, readOverride, readRequestOptions)
 	if err != nil {
 		diagnostics.AddError("Failed to retrieve resource", fmt.Errorf("checking for presence of existing %s: %+v", id, err).Error())
 		return
@@ -514,8 +525,8 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 	updateRequestOptions := clients.RequestOptions{
 		Headers:         common.AsMapOfString(model.UpdateHeaders),
 		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.UpdateQueryParameters)),
-		RetryOptions:    clients.NewRetryOptions(model.Retry),
 	}
+	updateRequestOptions.RetryOptions, updateRequestOptions.LastRetryError = clients.NewRetryOptions(model.Retry)
 
 	_, err = client.CreateOrUpdate(ctx, id.AzureResourceId, id.ApiVersion, requestBody, updateRequestOptions)
 	if err != nil {
@@ -523,7 +534,7 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 		return
 	}
 
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, readRequestOptions)
+	responseBody, err := readResource(ctx, client, id.AzureResourceId, id.ApiVersion, readOverride, readRequestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("Error reading %q - removing from state", id.ID()))
@@ -534,10 +545,16 @@ func (r *AzapiUpdateResource) CreateUpdate(ctx context.Context, requestConfig tf
 		return
 	}
 
-	model.ID = basetypes.NewStringValue(id.ID())
+	priorID := ""
+	priorResourceID := ""
+	if stateModel != nil {
+		priorID = stateModel.ID.ValueString()
+		priorResourceID = stateModel.ResourceID.ValueString()
+	}
+	model.ID = basetypes.NewStringValue(preserveCasing(priorID, id.ID(), r.ProviderData.Features.PreserveResourceIDCasing))
 	model.Name = basetypes.NewStringValue(id.Name)
 	model.ParentID = basetypes.NewStringValue(id.ParentId)
-	model.ResourceID = basetypes.NewStringValue(id.AzureResourceId)
+	model.ResourceID = basetypes.NewStringValue(preserveCasing(priorResourceID, id.AzureResourceId, r.ProviderData.Features.PreserveResourceIDCasing))
 
 	var defaultOutput interface{}
 	if !r.ProviderData.Features.DisableDefaultOutput {
@@ -591,9 +608,14 @@ func (r *AzapiUpdateResource) Read(ctx context.Context, request resource.ReadReq
 	requestOptions := clients.RequestOptions{
 		Headers:         common.AsMapOfString(model.ReadHeaders),
 		QueryParameters: clients.NewQueryParameters(common.AsMapOfLists(model.ReadQueryParameters)),
-		RetryOptions:    clients.NewRetryOptions(model.Retry),
 	}
-	responseBody, err := client.Get(ctx, id.AzureResourceId, id.ApiVersion, requestOptions)
+	requestOptions.RetryOptions, requestOptions.LastRetryError = clients.NewRetryOptions(model.Retry)
+	readOverride, readDiags := readOverrideFromObject(ctx, model.ReadOverride)
+	response.Diagnostics.Append(readDiags...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+	responseBody, err := readResource(ctx, client, id.AzureResourceId, id.ApiVersion, readOverride, requestOptions)
 	if err != nil {
 		if utils.ResponseErrorWasNotFound(err) {
 			tflog.Info(ctx, fmt.Sprintf("[INFO] Error reading %q - removing from state", id.ID()))
@@ -605,10 +627,10 @@ func (r *AzapiUpdateResource) Read(ctx context.Context, request resource.ReadReq
 	}
 
 	state := model
-	state.ID = basetypes.NewStringValue(id.ID())
+	state.ID = basetypes.NewStringValue(preserveCasing(model.ID.ValueString(), id.ID(), r.ProviderData.Features.PreserveResourceIDCasing))
 	state.Name = basetypes.NewStringValue(id.Name)
 	state.ParentID = basetypes.NewStringValue(id.ParentId)
-	state.ResourceID = basetypes.NewStringValue(id.AzureResourceId)
+	state.ResourceID = basetypes.NewStringValue(preserveCasing(model.ResourceID.ValueString(), id.AzureResourceId, r.ProviderData.Features.PreserveResourceIDCasing))
 	state.Type = basetypes.NewStringValue(fmt.Sprintf("%s@%s", id.AzureResourceType, id.ApiVersion))
 
 	requestBody := make(map[string]interface{})
